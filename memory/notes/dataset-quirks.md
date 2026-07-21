@@ -43,3 +43,15 @@ Each sequence (`MH_01_easy` .. `MH_05_difficult`) has `mav0/` with:
   of the 2026-07-20 check — a reasonable sanity-check number for a "did the
   loader read everything" test, but re-verify per-sequence rather than
   assuming all five match.
+- **cam0/cam1 are NOT always paired 1:1.** Confirmed 2026-07-20 via
+  `slam-inspect`: MH_01/02/03/05 have matching cam0/cam1 counts and
+  identical per-frame timestamps, but **MH_04_difficult has 2033 cam0
+  frames vs. 2032 cam1 frames** — one camera dropped a frame the other
+  didn't. Don't design the frontend around an assumed stereo-pair index
+  alignment; `slam_dataset::EuRocSequence` treats cam0/cam1/imu0 as three
+  independent time-sorted streams (see `EventStream` in
+  `crates/slam-dataset/src/events.rs`) precisely because of this. Stereo
+  matching downstream must pair frames by nearest timestamp, not by index.
+- **IMU timestamps jitter around the nominal 200 Hz rate**, not exactly
+  5,000,000 ns apart (observed deltas like 5,000,192 ns on MH_01). Any test
+  or code asserting IMU cadence needs a tolerance, not exact equality.

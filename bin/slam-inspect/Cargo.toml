@@ -1,0 +1,15 @@
+[package]
+name = "slam-inspect"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "slam-inspect"
+path = "src/main.rs"
+
+[dependencies]
+slam-dataset.workspace = true
+slam-eval.workspace = true
+nalgebra.workspace = true
+anyhow.workspace = true
+clap.workspace = true

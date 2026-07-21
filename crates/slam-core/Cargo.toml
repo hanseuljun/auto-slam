@@ -1,0 +1,7 @@
+[package]
+name = "slam-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nalgebra.workspace = true

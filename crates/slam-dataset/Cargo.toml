@@ -1,0 +1,15 @@
+[package]
+name = "slam-dataset"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nalgebra.workspace = true
+image.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true
+csv.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]

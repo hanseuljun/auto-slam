@@ -1,0 +1,10 @@
+[package]
+name = "slam-eval"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nalgebra.workspace = true
+csv.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
