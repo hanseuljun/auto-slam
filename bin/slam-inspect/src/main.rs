@@ -87,6 +87,8 @@ fn inspect_sequence(seq_dir: &Path) -> anyhow::Result<()> {
         events.len()
     );
 
+    print_vision_frontend(&seq);
+
     let gt_path = mav0.join("state_groundtruth_estimate0/data.csv");
     if gt_path.exists() {
         let traj = slam_eval::GroundTruthTrajectory::load(&gt_path)?;
@@ -149,6 +151,45 @@ fn print_stereo_geometry(cal: &slam_dataset::Calibration) {
             true_point_cam0.z, error_mm
         );
     }
+}
+
+/// Demonstrates M2 (`slam-vision`): grid-distributed FAST detection on the
+/// first frame, then pyramidal LK tracking survival over a handful of
+/// consecutive real frames.
+fn print_vision_frontend(seq: &slam_dataset::EuRocSequence) {
+    const NUM_FRAMES: usize = 5;
+    let num_frames = NUM_FRAMES.min(seq.cam0_frames.len());
+    if num_frames < 2 {
+        println!("vision frontend: not enough frames to demonstrate tracking");
+        return;
+    }
+
+    let frames: Vec<image::GrayImage> = (0..num_frames)
+        .map(|i| seq.load_cam0_image(i))
+        .collect::<anyhow::Result<_>>()
+        .expect("decode frames for vision frontend demo");
+
+    let keypoints = slam_vision::detect_grid(&frames[0], 20, 40, 3);
+    let pyramids: Vec<slam_vision::ImagePyramid> =
+        frames.iter().map(|f| slam_vision::ImagePyramid::build(f, 4)).collect();
+    let params = slam_vision::LkParams::default();
+
+    let initial_count = keypoints.len();
+    let mut positions: Vec<(f32, f32)> = keypoints.iter().map(|k| (k.x, k.y)).collect();
+    for i in 1..num_frames {
+        let results = slam_vision::track_pyramid(&pyramids[i - 1], &pyramids[i], &positions, &params);
+        positions = results
+            .into_iter()
+            .filter(|r| r.found && r.x >= 0.0 && r.y >= 0.0 && r.x < frames[i].width() as f32 && r.y < frames[i].height() as f32)
+            .map(|r| (r.x, r.y))
+            .collect();
+    }
+
+    println!(
+        "vision frontend: {initial_count} grid-FAST keypoints on frame 0, {} survived LK tracking across {num_frames} frames ({:.0}%)",
+        positions.len(),
+        100.0 * positions.len() as f64 / initial_count.max(1) as f64
+    );
 }
 
 fn print_groundtruth_summary(traj: &slam_eval::GroundTruthTrajectory) {

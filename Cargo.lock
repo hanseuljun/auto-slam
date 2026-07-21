@@ -563,11 +563,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "image",
  "nalgebra",
  "slam-core",
  "slam-dataset",
  "slam-eval",
  "slam-geometry",
+ "slam-vision",
 ]
 
 [[package]]
@@ -588,7 +590,10 @@ dependencies = [
 name = "slam-vision"
 version = "0.1.0"
 dependencies = [
+ "approx",
+ "image",
  "nalgebra",
+ "slam-dataset",
 ]
 
 [[package]]
