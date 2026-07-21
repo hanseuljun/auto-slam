@@ -505,6 +505,7 @@ dependencies = [
 name = "slam-core"
 version = "0.1.0"
 dependencies = [
+ "approx",
  "nalgebra",
 ]
 
@@ -542,7 +543,11 @@ dependencies = [
 name = "slam-geometry"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "approx",
  "nalgebra",
+ "slam-core",
+ "slam-dataset",
 ]
 
 [[package]]
@@ -559,8 +564,10 @@ dependencies = [
  "anyhow",
  "clap",
  "nalgebra",
+ "slam-core",
  "slam-dataset",
  "slam-eval",
+ "slam-geometry",
 ]
 
 [[package]]

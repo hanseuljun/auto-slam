@@ -64,6 +64,7 @@ fn inspect_sequence(seq_dir: &Path) -> anyhow::Result<()> {
     let mav0 = seq_dir.join("mav0");
     let seq = slam_dataset::EuRocSequence::load(&mav0)?;
     print_calibration(&seq.calibration);
+    print_stereo_geometry(&seq.calibration);
 
     println!(
         "cam0 frames: {}    cam1 frames: {}    imu samples: {}",
@@ -115,6 +116,39 @@ fn print_calibration(cal: &slam_dataset::Calibration) {
         cal.imu0.accelerometer_noise_density,
         cal.imu0.accelerometer_random_walk
     );
+}
+
+/// Demonstrates M1 (`slam-geometry`): stereo rectification stats plus a
+/// synthetic point projected through the real calibration and recovered via
+/// triangulation, as a live round-trip sanity check.
+fn print_stereo_geometry(cal: &slam_dataset::Calibration) {
+    let rig = slam_geometry::StereoRig {
+        t_bs_cam0: slam_core::SE3::from_matrix(&cal.cam0.t_bs),
+        t_bs_cam1: slam_core::SE3::from_matrix(&cal.cam1.t_bs),
+        cam0: slam_geometry::PinholeCamera::new(cal.cam0.intrinsics, cal.cam0.distortion_coefficients),
+        cam1: slam_geometry::PinholeCamera::new(cal.cam1.intrinsics, cal.cam1.distortion_coefficients),
+    };
+    let rect = rig.rectify();
+    println!(
+        "stereo rectification: baseline={:.4}m rectified_intrinsics(fu,fv,cu,cv)={:?}",
+        rect.baseline, rect.rectified_intrinsics
+    );
+
+    let true_point_cam0 = nalgebra::Vector3::new(0.1, -0.05, 3.0);
+    let t10 = rig.relative_pose_cam1_from_cam0();
+    let true_point_cam1 = t10.transform(&true_point_cam0);
+    let n0 = rig.cam0.unproject_to_normalized(rig.cam0.project(true_point_cam0));
+    let n1 = rig.cam1.unproject_to_normalized(rig.cam1.project(true_point_cam1));
+    let observations = [(slam_core::SE3::identity(), n0), (t10, n1)];
+
+    if let Some(linear) = slam_geometry::triangulate_linear(&observations) {
+        let refined = slam_geometry::triangulate_refine(&observations, linear, 5);
+        let error_mm = (refined - true_point_cam0).norm() * 1000.0;
+        println!(
+            "triangulation round-trip check: synthetic point at {:.2}m depth, recovered error = {:.6}mm",
+            true_point_cam0.z, error_mm
+        );
+    }
 }
 
 fn print_groundtruth_summary(traj: &slam_eval::GroundTruthTrajectory) {

@@ -5,3 +5,9 @@ edition.workspace = true
 
 [dependencies]
 nalgebra.workspace = true
+slam-core.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+approx.workspace = true
+slam-dataset.workspace = true

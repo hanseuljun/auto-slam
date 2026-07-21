@@ -8,8 +8,10 @@ name = "slam-inspect"
 path = "src/main.rs"
 
 [dependencies]
+slam-core.workspace = true
 slam-dataset.workspace = true
 slam-eval.workspace = true
+slam-geometry.workspace = true
 nalgebra.workspace = true
 anyhow.workspace = true
 clap.workspace = true
