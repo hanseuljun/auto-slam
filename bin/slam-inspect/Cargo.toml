@@ -13,6 +13,7 @@ slam-dataset.workspace = true
 slam-eval.workspace = true
 slam-geometry.workspace = true
 slam-vision.workspace = true
+slam-frontend.workspace = true
 nalgebra.workspace = true
 image.workspace = true
 anyhow.workspace = true

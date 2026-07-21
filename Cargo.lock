@@ -527,8 +527,10 @@ name = "slam-eval"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "approx",
  "csv",
  "nalgebra",
+ "slam-core",
  "thiserror",
 ]
 
@@ -536,7 +538,15 @@ dependencies = [
 name = "slam-frontend"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "approx",
+ "image",
  "nalgebra",
+ "slam-core",
+ "slam-dataset",
+ "slam-eval",
+ "slam-geometry",
+ "slam-vision",
 ]
 
 [[package]]
@@ -568,6 +578,7 @@ dependencies = [
  "slam-core",
  "slam-dataset",
  "slam-eval",
+ "slam-frontend",
  "slam-geometry",
  "slam-vision",
 ]

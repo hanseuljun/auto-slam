@@ -90,12 +90,16 @@ fn inspect_sequence(seq_dir: &Path) -> anyhow::Result<()> {
     print_vision_frontend(&seq);
 
     let gt_path = mav0.join("state_groundtruth_estimate0/data.csv");
-    if gt_path.exists() {
+    let groundtruth = if gt_path.exists() {
         let traj = slam_eval::GroundTruthTrajectory::load(&gt_path)?;
         print_groundtruth_summary(&traj);
+        Some(traj)
     } else {
         println!("no groundtruth found at {}", gt_path.display());
-    }
+        None
+    };
+
+    print_stereo_vo(&seq, groundtruth.as_ref());
 
     println!();
     Ok(())
@@ -190,6 +194,80 @@ fn print_vision_frontend(seq: &slam_dataset::EuRocSequence) {
         positions.len(),
         100.0 * positions.len() as f64 / initial_count.max(1) as f64
     );
+}
+
+/// Demonstrates M3 (`slam-frontend`): stereo-only (no IMU, no backend) VO
+/// over a real clip, aligned onto ground truth via Umeyama, reported as
+/// ATE. This is the first end-to-end accuracy checkpoint from
+/// `plan/STAGE1.md` — not the SOTA VIO bar (that needs M4/M5 IMU fusion
+/// and backend optimization), just proof the frontend is geometrically
+/// sane.
+fn print_stereo_vo(seq: &slam_dataset::EuRocSequence, groundtruth: Option<&slam_eval::GroundTruthTrajectory>) {
+    const NUM_FRAMES: usize = 150;
+    let num_frames = NUM_FRAMES.min(seq.cam0_frames.len());
+    if num_frames < 2 {
+        println!("stereo VO: not enough frames to demonstrate");
+        return;
+    }
+
+    let cal = &seq.calibration;
+    let rig = slam_geometry::StereoRig {
+        t_bs_cam0: slam_core::SE3::from_matrix(&cal.cam0.t_bs),
+        t_bs_cam1: slam_core::SE3::from_matrix(&cal.cam1.t_bs),
+        cam0: slam_geometry::PinholeCamera::new(cal.cam0.intrinsics, cal.cam0.distortion_coefficients),
+        cam1: slam_geometry::PinholeCamera::new(cal.cam1.intrinsics, cal.cam1.distortion_coefficients),
+    };
+    let mut vo = slam_frontend::VoPipeline::new(rig, slam_frontend::VoParams::default());
+
+    let left0 = seq.load_cam0_image(0).expect("decode frame 0");
+    let right0 = seq.load_cam1_image(0).expect("decode frame 0");
+    vo.init(&left0, &right0);
+
+    let mut positions = vec![nalgebra::Vector3::zeros()];
+    let mut timestamps = vec![seq.cam0_frames[0].timestamp_ns];
+    let mut lost_at = None;
+    for i in 1..num_frames {
+        let left = seq.load_cam0_image(i).expect("decode frame");
+        let right = seq.load_cam1_image(i).expect("decode frame");
+        match vo.process_frame(&left, &right) {
+            Some(result) => {
+                positions.push(result.pose_world_to_cam0.inverse().translation);
+                timestamps.push(seq.cam0_frames[i].timestamp_ns);
+            }
+            None => {
+                lost_at = Some(i);
+                break;
+            }
+        }
+    }
+
+    print!(
+        "stereo VO: {} landmarks initialized, tracked {}/{num_frames} frames{}",
+        vo.num_landmarks(),
+        positions.len(),
+        lost_at.map(|i| format!(" (lost at frame {i})")).unwrap_or_default()
+    );
+
+    match groundtruth {
+        Some(gt) => {
+            let mut aligned_estimate = Vec::new();
+            let mut aligned_groundtruth = Vec::new();
+            for (t, p) in timestamps.iter().zip(positions.iter()) {
+                if let Some(pose) = gt.interpolate(*t) {
+                    aligned_estimate.push(*p);
+                    aligned_groundtruth.push(pose.position);
+                }
+            }
+            match slam_eval::compute_ate(&aligned_estimate, &aligned_groundtruth) {
+                Some(stats) => println!(
+                    ", ATE (Sim3-aligned, VO-only, no IMU/backend/loop-closure) over {} poses: rmse={:.3}m mean={:.3}m median={:.3}m max={:.3}m",
+                    stats.num_points, stats.rmse, stats.mean, stats.median, stats.max
+                ),
+                None => println!(", not enough groundtruth-covered poses to compute ATE"),
+            }
+        }
+        None => println!(", no groundtruth available for ATE"),
+    }
 }
 
 fn print_groundtruth_summary(traj: &slam_eval::GroundTruthTrajectory) {

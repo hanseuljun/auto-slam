@@ -8,3 +8,7 @@ nalgebra.workspace = true
 csv.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+approx.workspace = true
+slam-core.workspace = true
