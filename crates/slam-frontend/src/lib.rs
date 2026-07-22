@@ -1,13 +1,15 @@
 //! Stereo visual tracking, keyframe selection, and static/dynamic VI
 //! initialization (Stage 1 milestones M3-M4). M3: stereo matching
 //! (`stereo`) + a stereo-only (no IMU) VO pipeline (`vo`) — the first
-//! end-to-end accuracy checkpoint. M4's IMU-based initializer lands later,
-//! once `slam-imu` exists.
+//! end-to-end accuracy checkpoint. M4: the dynamic (moving-start)
+//! vision-IMU alignment initializer (`vi_init`), for MH_04/05.
 
 mod stereo;
+mod vi_init;
 mod vo;
 
 pub use stereo::{match_stereo_keypoints, StereoMatch, StereoMatchParams};
+pub use vi_init::{dynamic_initialize, DynamicInitResult, VoKeyframe};
 pub use vo::{FrameResult, VoParams, VoPipeline};
 
 #[cfg(test)]
@@ -19,9 +21,13 @@ mod integration_tests {
     use std::path::PathBuf;
 
     fn mh01_sequence() -> slam_dataset::EuRocSequence {
+        load_sequence("MH_01_easy")
+    }
+
+    fn load_sequence(name: &str) -> slam_dataset::EuRocSequence {
         let mav0 = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../data/machine_hall/MH_01_easy/mav0");
-        slam_dataset::EuRocSequence::load(mav0).expect("load MH_01_easy")
+            .join(format!("../../data/machine_hall/{name}/mav0"));
+        slam_dataset::EuRocSequence::load(mav0).unwrap_or_else(|e| panic!("load {name}: {e}"))
     }
 
     fn stereo_rig(cal: &slam_dataset::Calibration) -> StereoRig {
@@ -106,5 +112,72 @@ mod integration_tests {
         // over a short clip: proves the pipeline is geometrically sane
         // (not diverging/garbage), not that it's SOTA — see doc comment.
         assert!(stats.rmse < 1.0, "VO-only ATE RMSE unexpectedly large: {}", stats.rmse);
+    }
+
+    /// M4's dynamic-initializer checkpoint: MH_04_difficult never settles
+    /// into a stationary window (see `memory/notes/dataset-quirks.md`), so
+    /// it needs `dynamic_initialize` rather than
+    /// `slam_imu::static_initialize`. Runs stereo VO over the first few
+    /// real seconds to get keyframe poses, feeds those + the raw IMU into
+    /// the initializer, and checks it converges to a plausible gravity
+    /// vector within that short window — "converges within the first few
+    /// seconds" per `plan/STAGE1.md` M4, not a tight accuracy bound (this
+    /// is real, noisy VO + IMU, and accel bias is fixed at zero by design
+    /// — see `vi_init::solve_gravity_bias_velocity`'s doc comment).
+    #[test]
+    fn dynamic_initializer_converges_on_mh04_moving_start() {
+        let seq = load_sequence("MH_04_difficult");
+        let rig = stereo_rig(&seq.calibration);
+        let t_bs_cam0 = rig.t_bs_cam0;
+        let mut vo = VoPipeline::new(rig, VoParams::default());
+
+        let num_frames = 100usize.min(seq.cam0_frames.len()); // ~5s at 20Hz
+        let left0 = seq.load_cam0_image(0).unwrap();
+        let right0 = seq.load_cam1_image(0).unwrap();
+        vo.init(&left0, &right0);
+
+        let mut keyframes = vec![VoKeyframe {
+            timestamp_ns: seq.cam0_frames[0].timestamp_ns,
+            pose_world_to_cam0: SE3::identity(),
+        }];
+        // Sample VO poses at a regular interval as "keyframes" for the
+        // initializer — it just needs reasonably spaced poses + their
+        // timestamps, not the VoPipeline's own (denser) keyframe selection.
+        let keyframe_stride = 10; // 0.5s at 20Hz
+        for i in 1..num_frames {
+            let left = seq.load_cam0_image(i).unwrap();
+            let right = seq.load_cam1_image(i).unwrap();
+            let Some(result) = vo.process_frame(&left, &right) else {
+                break;
+            };
+            if i % keyframe_stride == 0 {
+                keyframes.push(VoKeyframe {
+                    timestamp_ns: seq.cam0_frames[i].timestamp_ns,
+                    pose_world_to_cam0: result.pose_world_to_cam0,
+                });
+            }
+        }
+        assert!(keyframes.len() >= 4, "expected enough keyframes to initialize, got {}", keyframes.len());
+
+        let result = dynamic_initialize(&keyframes, &seq.imu_samples, &t_bs_cam0).expect("dynamic initializer should converge");
+        println!(
+            "MH_04 dynamic init over {} keyframes ({:.1}s): gravity={:?} |g|={:.3} gyro_bias={:?}",
+            keyframes.len(),
+            (keyframes.last().unwrap().timestamp_ns - keyframes[0].timestamp_ns) as f64 * 1e-9,
+            result.gravity_world,
+            result.gravity_world.norm(),
+            result.gyro_bias
+        );
+
+        assert!(
+            (result.gravity_world.norm() - 9.81).abs() < 2.0,
+            "gravity magnitude implausible for a converged initializer: {}",
+            result.gravity_world.norm()
+        );
+        assert!(
+            result.gyro_bias.norm() < 1.0,
+            "gyro bias implausibly large: {}",
+            result.gyro_bias
+        );
     }
 }

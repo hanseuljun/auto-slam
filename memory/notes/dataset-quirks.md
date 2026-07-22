@@ -40,8 +40,16 @@ Each sequence (`MH_01_easy` .. `MH_05_difficult`) has `mav0/` with:
   the recording**, not at t=0. `slam_imu::find_stationary_window` scans
   for this rather than assuming any fixed offset — don't hardcode "first N
   samples" for a static initializer on any sequence without checking.
-  MH_04/05 are still the ones that never settle at all (need the dynamic
-  vision-IMU alignment initializer, `plan/STAGE1.md` M4's fallback path).
+  Checked across all five sequences 2026-07-21 via `slam-inspect` with
+  `find_stationary_window(window=200 samples, max_gyro_norm=0.09)`: MH_01
+  finds a window at ~25.8s in, **MH_04 finds one at ~12.6s in** (despite
+  being the "difficult/moving" sequence!), MH_05 finds one at sample 0
+  (genuinely stationary from the start), but **MH_02 and MH_03 find none
+  at all** under this threshold/window size. So the plan's
+  "MH_01/02/03 static, MH_04/05 dynamic" grouping is a rough label, not a
+  reliable per-sequence guarantee — always try `find_stationary_window`
+  first and fall back to the dynamic initializer if it returns `None`,
+  regardless of which sequence you're on.
 - **The ADIS16448's raw (factory-uncalibrated) gyro bias is large** —
   empirically ~0.08 rad/s (≈4.6°/s) on MH_01's z-axis, consistent across
   multiple genuinely-stationary windows at different times in the

@@ -99,7 +99,8 @@ fn inspect_sequence(seq_dir: &Path) -> anyhow::Result<()> {
         None
     };
 
-    print_stereo_vo(&seq, groundtruth.as_ref());
+    let vo_keyframes = print_stereo_vo(&seq, groundtruth.as_ref());
+    print_imu_initialization(&seq, &vo_keyframes);
 
     println!();
     Ok(())
@@ -202,12 +203,12 @@ fn print_vision_frontend(seq: &slam_dataset::EuRocSequence) {
 /// `plan/STAGE1.md` — not the SOTA VIO bar (that needs M4/M5 IMU fusion
 /// and backend optimization), just proof the frontend is geometrically
 /// sane.
-fn print_stereo_vo(seq: &slam_dataset::EuRocSequence, groundtruth: Option<&slam_eval::GroundTruthTrajectory>) {
+fn print_stereo_vo(seq: &slam_dataset::EuRocSequence, groundtruth: Option<&slam_eval::GroundTruthTrajectory>) -> Vec<slam_frontend::VoKeyframe> {
     const NUM_FRAMES: usize = 150;
     let num_frames = NUM_FRAMES.min(seq.cam0_frames.len());
     if num_frames < 2 {
         println!("stereo VO: not enough frames to demonstrate");
-        return;
+        return Vec::new();
     }
 
     let cal = &seq.calibration;
@@ -223,17 +224,19 @@ fn print_stereo_vo(seq: &slam_dataset::EuRocSequence, groundtruth: Option<&slam_
     let right0 = seq.load_cam1_image(0).expect("decode frame 0");
     vo.init(&left0, &right0);
 
-    let mut positions = vec![nalgebra::Vector3::zeros()];
-    let mut timestamps = vec![seq.cam0_frames[0].timestamp_ns];
+    let mut keyframes = vec![slam_frontend::VoKeyframe {
+        timestamp_ns: seq.cam0_frames[0].timestamp_ns,
+        pose_world_to_cam0: slam_core::SE3::identity(),
+    }];
     let mut lost_at = None;
     for i in 1..num_frames {
         let left = seq.load_cam0_image(i).expect("decode frame");
         let right = seq.load_cam1_image(i).expect("decode frame");
         match vo.process_frame(&left, &right) {
-            Some(result) => {
-                positions.push(result.pose_world_to_cam0.inverse().translation);
-                timestamps.push(seq.cam0_frames[i].timestamp_ns);
-            }
+            Some(result) => keyframes.push(slam_frontend::VoKeyframe {
+                timestamp_ns: seq.cam0_frames[i].timestamp_ns,
+                pose_world_to_cam0: result.pose_world_to_cam0,
+            }),
             None => {
                 lost_at = Some(i);
                 break;
@@ -244,7 +247,7 @@ fn print_stereo_vo(seq: &slam_dataset::EuRocSequence, groundtruth: Option<&slam_
     print!(
         "stereo VO: {} landmarks initialized, tracked {}/{num_frames} frames{}",
         vo.num_landmarks(),
-        positions.len(),
+        keyframes.len(),
         lost_at.map(|i| format!(" (lost at frame {i})")).unwrap_or_default()
     );
 
@@ -252,9 +255,9 @@ fn print_stereo_vo(seq: &slam_dataset::EuRocSequence, groundtruth: Option<&slam_
         Some(gt) => {
             let mut aligned_estimate = Vec::new();
             let mut aligned_groundtruth = Vec::new();
-            for (t, p) in timestamps.iter().zip(positions.iter()) {
-                if let Some(pose) = gt.interpolate(*t) {
-                    aligned_estimate.push(*p);
+            for kf in &keyframes {
+                if let Some(pose) = gt.interpolate(kf.timestamp_ns) {
+                    aligned_estimate.push(kf.pose_world_to_cam0.inverse().translation);
                     aligned_groundtruth.push(pose.position);
                 }
             }
@@ -267,6 +270,50 @@ fn print_stereo_vo(seq: &slam_dataset::EuRocSequence, groundtruth: Option<&slam_
             }
         }
         None => println!(", no groundtruth available for ATE"),
+    }
+
+    keyframes
+}
+
+/// Demonstrates M4 (`slam-imu` + `slam-frontend::vi_init`): static
+/// gravity/gyro-bias initialization from a stationary IMU window if one
+/// exists, and the dynamic (moving-start) vision-IMU alignment initializer
+/// otherwise/always, reusing the VO keyframes from `print_stereo_vo`.
+fn print_imu_initialization(seq: &slam_dataset::EuRocSequence, vo_keyframes: &[slam_frontend::VoKeyframe]) {
+    let all_gyro: Vec<nalgebra::Vector3<f64>> = seq.imu_samples.iter().map(|s| s.gyro).collect();
+    match slam_imu::find_stationary_window(&all_gyro, 200, 0.09) {
+        Some(start) => {
+            let gyro = &all_gyro[start..start + 200];
+            let accel: Vec<nalgebra::Vector3<f64>> = seq.imu_samples[start..start + 200].iter().map(|s| s.accel).collect();
+            match slam_imu::static_initialize(gyro, &accel) {
+                Some(r) => println!(
+                    "static IMU init: stationary window at sample {start} ({:.1}s in), gravity_magnitude={:.3} gyro_bias_norm={:.4}",
+                    start as f64 / 200.0,
+                    r.gravity_magnitude,
+                    r.gyro_bias.norm()
+                ),
+                None => println!("static IMU init: stationary window found but initialization failed"),
+            }
+        }
+        None => println!("static IMU init: no stationary window found in this sequence (expected for MH_04/05)"),
+    }
+
+    let stride = 10; // ~0.5s at 20Hz
+    let dynamic_keyframes: Vec<slam_frontend::VoKeyframe> = vo_keyframes.iter().step_by(stride).copied().collect();
+    if dynamic_keyframes.len() < 4 {
+        println!("dynamic VI init: not enough keyframes to demonstrate");
+        return;
+    }
+    let t_bs_cam0 = slam_core::SE3::from_matrix(&seq.calibration.cam0.t_bs);
+    match slam_frontend::dynamic_initialize(&dynamic_keyframes, &seq.imu_samples, &t_bs_cam0) {
+        Some(r) => println!(
+            "dynamic VI init: {} keyframes ({:.1}s), gravity_magnitude={:.3} gyro_bias_norm={:.4}",
+            dynamic_keyframes.len(),
+            (dynamic_keyframes.last().unwrap().timestamp_ns - dynamic_keyframes[0].timestamp_ns) as f64 * 1e-9,
+            r.gravity_world.norm(),
+            r.gyro_bias.norm()
+        ),
+        None => println!("dynamic VI init: did not converge"),
     }
 }
 

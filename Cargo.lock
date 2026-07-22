@@ -546,6 +546,7 @@ dependencies = [
  "slam-dataset",
  "slam-eval",
  "slam-geometry",
+ "slam-imu",
  "slam-vision",
 ]
 
@@ -583,6 +584,7 @@ dependencies = [
  "slam-eval",
  "slam-frontend",
  "slam-geometry",
+ "slam-imu",
  "slam-vision",
 ]
 
