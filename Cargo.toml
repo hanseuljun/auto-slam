@@ -12,6 +12,7 @@ members = [
     "crates/slam-loopclosure",
     "crates/slam-eval",
     "bin/slam-inspect",
+    "bin/slam-run",
 ]
 
 [workspace.package]

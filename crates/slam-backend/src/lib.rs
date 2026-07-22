@@ -6,4 +6,4 @@
 mod tests_integration;
 mod vio;
 
-pub use vio::{VioFrameResult, VioParams, VioPipeline};
+pub use vio::{VioFrameResult, VioParams, VioPipeline, VioTiming};

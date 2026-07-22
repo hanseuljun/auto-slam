@@ -4,6 +4,7 @@ One line per entry, newest first within each section. See `README.md` for
 what goes where.
 
 ## progress/
+- [2026-07-21-stage2-m0-evaluation-and-timing-harness.md](progress/2026-07-21-stage2-m0-evaluation-and-timing-harness.md) — Stage 2 M0 done: bin/slam-run + docs/RESULTS.md (accuracy + real-time factor vs. published SOTA). Found and fixed a real determinism bug (HashMap iteration order, decisions/0011) along the way.
 - [2026-07-21-stage2-plan.md](progress/2026-07-21-stage2-plan.md) — wrote `plan/STAGE2.md`: real-time VIO (factor <=1.0) + finishing Stage 1's M9/M10, after a rolled-back M9 attempt found global BA's dense O(n^3) solve doesn't scale (decisions/0007's unbounded history is the root cause).
 - [2026-07-21-m8-global-bundle-adjustment.md](progress/2026-07-21-m8-global-bundle-adjustment.md) — M8 done: global BA over the full retained trajectory, reusing slam-optim's Problem/optimize. ATE held (0.1366m→0.1377m) on a short loop-free MH_01 clip — expected; a real win likely needs a longer sequence and/or post-loop-closure.
 - [2026-07-21-m7-loop-closure.md](progress/2026-07-21-m7-loop-closure.md) — M7 done: BoW vocabulary + geometric verification + pose-graph optimization, real MH_05 loop verified, ATE 5.6m→3.3m. Four real bugs found and fixed, including a hidden VoPipeline corruption.
@@ -17,6 +18,7 @@ what goes where.
 - [2026-07-20-stage1-plan.md](progress/2026-07-20-stage1-plan.md) — wrote `plan/STAGE1.md`, set up CLAUDE.md + this memory directory; no pipeline code yet.
 
 ## decisions/
+- [0011-solver-uses-btreemap-not-hashmap-for-determinism.md](decisions/0011-solver-uses-btreemap-not-hashmap-for-determinism.md) — slam-optim's solver switched from HashMap to BTreeMap: HashMap's randomized-per-process iteration order made identical runs on identical input produce different trajectories, a real violation of Stage 1's determinism requirement.
 - [0009-vo-rejects-implausible-pose-jumps.md](decisions/0009-vo-rejects-implausible-pose-jumps.md) — VoPipeline now rejects PnP poses implying implausible translation jumps; a real corruption found by M7's full-MH_05 test, invisible to M6's own Sim3-aligned ATE checkpoint.
 - [0008-loop-closure-descriptor-matching-needs-ratio-test.md](decisions/0008-loop-closure-descriptor-matching-needs-ratio-test.md) — M7's descriptor matching needed a Lowe's-ratio-test filter, not just an absolute Hamming threshold, to get real geometric verification working on MH_05.
 - [0007-m5-backend-is-naive-fixed-lag-not-marginalized.md](decisions/0007-m5-backend-is-naive-fixed-lag-not-marginalized.md) — M5's sliding window drops the oldest keyframe outright instead of marginalizing it into a prior; a documented staged-scope choice, not an oversight.

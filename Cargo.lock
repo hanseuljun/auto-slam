@@ -628,6 +628,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "slam-run"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "nalgebra",
+ "slam-backend",
+ "slam-core",
+ "slam-dataset",
+ "slam-eval",
+ "slam-geometry",
+ "slam-imu",
+ "slam-optim",
+]
+
+[[package]]
 name = "slam-vision"
 version = "0.1.0"
 dependencies = [

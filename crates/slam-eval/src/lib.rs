@@ -1,17 +1,23 @@
 //! Ground-truth trajectory I/O, timestamp-interpolated pose lookup, and
-//! Sim3/ATE alignment, used to evaluate estimated trajectories against
+//! Sim3/ATE/RPE alignment, used to evaluate estimated trajectories against
 //! `state_groundtruth_estimate0/data.csv` (M0: I/O; M3: brought Umeyama+ATE
-//! forward from M9 since M3's own checkpoint needs it — see
-//! `memory/decisions`. The fuller RPE/per-sequence-report harness is still
-//! M9's job).
+//! forward from Stage 1's M9 since M3's own checkpoint needs it — see
+//! `memory/decisions`; Stage 2's M0: RPE + per-sequence/aggregate CSV
+//! reports + wall-clock timing, finishing Stage 1's M9).
 
 mod align;
+mod report;
+mod rpe;
+mod timing;
 
 use std::path::Path;
 
 use nalgebra::{UnitQuaternion, Vector3};
 
 pub use align::{compute_ate, umeyama_alignment, AteStats, Sim3Alignment};
+pub use report::{build_report, write_summary_csv, write_trajectory_csv, TrajectoryReport};
+pub use rpe::{compute_rpe, RpeStats};
+pub use timing::TimingBreakdown;
 
 /// One row of `state_groundtruth_estimate0/data.csv`.
 #[derive(Debug, Clone, Copy)]

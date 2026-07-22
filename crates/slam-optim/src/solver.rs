@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use nalgebra::{DMatrix, DVector, Dim, Matrix3, SMatrix, SVector, Storage, Vector2, Vector3};
 use slam_core::SE3;
@@ -105,13 +105,21 @@ fn sub_rows<R: Dim, S: Storage<f64, R>>(v: &mut DVector<f64>, row: usize, block:
 struct LandmarkSchur {
     h_ll_inv: Matrix3<f64>,
     b_l: Vector3<f64>,
-    h_lp: HashMap<usize, SMatrix<f64, 3, STATE_DIM>>,
+    /// `BTreeMap`, not `HashMap`: this gets iterated below to accumulate
+    /// into the shared `h_pp`/`b_p` (floating-point addition isn't
+    /// associative), and again during back-substitution in `optimize` —
+    /// `HashMap`'s randomized-per-process iteration order made two runs
+    /// of the identical input produce different LM trajectories (a real,
+    /// measured bug: three runs of the same 600-frame MH_01 clip gave 3
+    /// different keyframe counts before this fix). `plan/STAGE1.md`'s own
+    /// cross-cutting requirement is deterministic, reproducible runs.
+    h_lp: BTreeMap<usize, SMatrix<f64, 3, STATE_DIM>>,
 }
 
 struct NormalEquations {
     h_pp: DMatrix<f64>,
     b_p: DVector<f64>,
-    landmark_schur: HashMap<usize, LandmarkSchur>,
+    landmark_schur: BTreeMap<usize, LandmarkSchur>,
 }
 
 /// Sum of weighted (and, for reprojection, Huber-downweighted) squared
@@ -176,18 +184,21 @@ fn build_normal_equations(problem: &Problem, config: &SolverConfig) -> NormalEqu
         accumulate_pair(&mut h_pp, &mut b_p, free_index(f.i), free_index(f.j), &wji, &wjj, &wr);
     }
 
-    let mut by_landmark: HashMap<usize, Vec<&ReprojectionObservation>> = HashMap::new();
+    // BTreeMap, not HashMap: iterated below to accumulate into the shared
+    // h_pp/b_p, and floating-point addition order affects the result — see
+    // LandmarkSchur::h_lp's doc comment for the bug this fixes.
+    let mut by_landmark: BTreeMap<usize, Vec<&ReprojectionObservation>> = BTreeMap::new();
     for obs in &problem.reprojection_obs {
         by_landmark.entry(obs.landmark_idx).or_default().push(obs);
     }
 
-    let mut landmark_schur = HashMap::new();
+    let mut landmark_schur = BTreeMap::new();
     let sqrt_reproj_w = config.reprojection_weight.sqrt();
     for (&landmark_idx, obs_list) in &by_landmark {
         let landmark = problem.landmarks[landmark_idx];
         let mut h_ll = Matrix3::<f64>::zeros();
         let mut b_l = Vector3::<f64>::zeros();
-        let mut h_lp: HashMap<usize, SMatrix<f64, 3, STATE_DIM>> = HashMap::new();
+        let mut h_lp: BTreeMap<usize, SMatrix<f64, 3, STATE_DIM>> = BTreeMap::new();
 
         for obs in obs_list {
             let Some((r, jac_pose, jac_landmark)) = reprojection_residual_jacobian(&problem.keyframes[obs.keyframe_idx], &obs.t_bs_cam, landmark, obs.observed_normalized) else {
@@ -402,6 +413,125 @@ mod tests {
         }
         for (estimated, true_landmark) in problem.landmarks.iter().zip(true_landmarks.iter()) {
             assert_relative_eq!(estimated, true_landmark, epsilon = 1e-2);
+        }
+    }
+
+    /// Regression test for a real, measured bug (see `LandmarkSchur::h_lp`'s
+    /// doc comment): `build_normal_equations` used to accumulate landmark
+    /// Schur-complement contributions into the shared `h_pp`/`b_p` by
+    /// iterating `HashMap`s, whose iteration order is randomized per
+    /// process (not per input) — so re-running the *same* pipeline on the
+    /// *same* sequence in two separate process invocations could converge
+    /// to measurably different trajectories, purely from floating-point
+    /// summation order, not any difference in the input. Confirmed live:
+    /// three `cargo run`s of the identical 600-frame MH_01 clip gave three
+    /// different keyframe counts (242, 68, 113) before this fix, all
+    /// identical (261) after switching to `BTreeMap`.
+    ///
+    /// This test builds the same toy problem twice, with `reprojection_obs`
+    /// inserted in reversed order the second time (each landmark's own
+    /// observations end up in reversed relative order too, not just a
+    /// no-op global reorder), and checks `optimize` converges to the same
+    /// answer either way — the property the bug violated.
+    #[test]
+    fn optimize_result_does_not_depend_on_observation_insertion_order() {
+        let w_true = Vector3::new(0.1, -0.05, 0.15);
+        let v_true = Vector3::new(0.3, 0.1, -0.05);
+        let g_true = Vector3::new(0.0, 0.0, -9.81);
+        let dt_step = 1.0 / 200.0;
+        let dt_keyframe = 0.2;
+
+        let body_pose_at = |t: f64| SE3::new(SO3::exp(w_true * t), v_true * t);
+        let true_state_at = |t: f64| KeyframeState::new(body_pose_at(t).inverse(), v_true, Vector3::zeros(), Vector3::zeros());
+
+        let num_keyframes = 4;
+        let true_states: Vec<KeyframeState> = (0..num_keyframes).map(|k| true_state_at(k as f64 * dt_keyframe)).collect();
+
+        let mut imu_factors = Vec::new();
+        for k in 0..num_keyframes - 1 {
+            let mut pre = Preintegration::new(Vector3::zeros(), Vector3::zeros());
+            let steps = (dt_keyframe / dt_step) as usize;
+            for s in 0..steps {
+                let t = k as f64 * dt_keyframe + s as f64 * dt_step;
+                let r_wb = body_pose_at(t).rotation;
+                let specific_force = r_wb.inverse().transform(&(-g_true));
+                pre.integrate_measurement(w_true, specific_force, dt_step);
+            }
+            imu_factors.push(ImuFactorSpec { i: k, j: k + 1, preint: pre, dt: dt_keyframe });
+        }
+        let bias_rw_factors: Vec<BiasRwFactorSpec> = (0..num_keyframes - 1).map(|k| BiasRwFactorSpec { i: k, j: k + 1 }).collect();
+
+        let true_landmarks: Vec<Vector3<f64>> = (0..20)
+            .map(|i| {
+                let a = i as f64;
+                Vector3::new((a * 0.37).sin() * 1.5, (a * 0.53).cos() * 1.5, 3.0 + (a * 0.19).sin())
+            })
+            .collect();
+
+        let mut reprojection_obs = Vec::new();
+        for (k, state) in true_states.iter().enumerate() {
+            for (l, landmark) in true_landmarks.iter().enumerate() {
+                let p_body = state.pose.transform(landmark);
+                if p_body.z <= 0.05 {
+                    continue;
+                }
+                let obs = Vector2::new(p_body.x / p_body.z, p_body.y / p_body.z);
+                reprojection_obs.push(ReprojectionObservation {
+                    keyframe_idx: k,
+                    landmark_idx: l,
+                    t_bs_cam: SE3::identity(),
+                    observed_normalized: obs,
+                });
+            }
+        }
+
+        let mut keyframes = true_states.clone();
+        for kf in keyframes.iter_mut().skip(1) {
+            let perturb = SVector::<f64, STATE_DIM>::from_fn(|i, _| if i < 6 { 0.02 } else { 0.01 });
+            *kf = kf.retract(&perturb);
+        }
+        let landmarks: Vec<Vector3<f64>> = true_landmarks.iter().map(|p| p + Vector3::new(0.03, -0.02, 0.04)).collect();
+
+        let config = SolverConfig {
+            max_iterations: 20,
+            ..SolverConfig::default()
+        };
+
+        let mut forward_obs = Vec::new();
+        for obs in &reprojection_obs {
+            forward_obs.push(ReprojectionObservation { keyframe_idx: obs.keyframe_idx, landmark_idx: obs.landmark_idx, t_bs_cam: obs.t_bs_cam, observed_normalized: obs.observed_normalized });
+        }
+        let mut problem_forward = Problem {
+            keyframes: keyframes.clone(),
+            landmarks: landmarks.clone(),
+            reprojection_obs: forward_obs,
+            imu_factors: imu_factors.iter().map(|f| ImuFactorSpec { i: f.i, j: f.j, preint: f.preint.clone(), dt: f.dt }).collect(),
+            bias_rw_factors: (0..num_keyframes - 1).map(|k| BiasRwFactorSpec { i: k, j: k + 1 }).collect(),
+            gravity_world: g_true,
+        };
+        optimize(&mut problem_forward, &config);
+
+        let reversed_obs: Vec<ReprojectionObservation> = reprojection_obs
+            .iter()
+            .rev()
+            .map(|obs| ReprojectionObservation { keyframe_idx: obs.keyframe_idx, landmark_idx: obs.landmark_idx, t_bs_cam: obs.t_bs_cam, observed_normalized: obs.observed_normalized })
+            .collect();
+        let mut problem_reversed = Problem {
+            keyframes,
+            landmarks,
+            reprojection_obs: reversed_obs,
+            imu_factors,
+            bias_rw_factors,
+            gravity_world: g_true,
+        };
+        optimize(&mut problem_reversed, &config);
+
+        for (a, b) in problem_forward.keyframes.iter().zip(problem_reversed.keyframes.iter()) {
+            assert_relative_eq!(a.pose.matrix(), b.pose.matrix(), epsilon = 1e-9);
+            assert_relative_eq!(a.velocity, b.velocity, epsilon = 1e-9);
+        }
+        for (a, b) in problem_forward.landmarks.iter().zip(problem_reversed.landmarks.iter()) {
+            assert_relative_eq!(a, b, epsilon = 1e-9);
         }
     }
 }

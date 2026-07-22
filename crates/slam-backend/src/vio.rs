@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::time::{Duration, Instant};
 
 use image::GrayImage;
 use nalgebra::{Vector2, Vector3};
@@ -137,6 +138,25 @@ pub struct VioPipeline {
     prev_pyramid: Option<ImagePyramid>,
     imu_buffer: Vec<ImuSample>,
     frame_index: usize,
+
+    /// Cumulative wall-clock spent in the continuous, per-frame VIO loop
+    /// (pyramid build, LK tracking, PnP, new-landmark detection/stereo
+    /// matching) vs. the windowed backend optimization
+    /// (`run_optimization`) and the one-shot global BA pass
+    /// (`global_bundle_adjustment`) — the basis for `plan/STAGE2.md`'s
+    /// real-time bar, exposed via `timing()`.
+    vision_time: Duration,
+    optimization_time: Duration,
+    global_ba_time: Duration,
+}
+
+/// Cumulative wall-clock timing since a `VioPipeline` was created — see
+/// the struct fields' doc comment for what each bucket covers.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct VioTiming {
+    pub vision_seconds: f64,
+    pub optimization_seconds: f64,
+    pub global_ba_seconds: f64,
 }
 
 impl VioPipeline {
@@ -165,6 +185,17 @@ impl VioPipeline {
             prev_pyramid: None,
             imu_buffer: Vec::new(),
             frame_index: 0,
+            vision_time: Duration::ZERO,
+            optimization_time: Duration::ZERO,
+            global_ba_time: Duration::ZERO,
+        }
+    }
+
+    pub fn timing(&self) -> VioTiming {
+        VioTiming {
+            vision_seconds: self.vision_time.as_secs_f64(),
+            optimization_seconds: self.optimization_time.as_secs_f64(),
+            global_ba_seconds: self.global_ba_time.as_secs_f64(),
         }
     }
 
@@ -196,6 +227,7 @@ impl VioPipeline {
         self.imu_buffer.extend_from_slice(imu_since_last);
         self.frame_index += 1;
 
+        let track_start = Instant::now();
         let prev_pyramid = self.prev_pyramid.as_ref()?;
         let curr_pyramid = ImagePyramid::build(left, 4);
         let prev_positions: Vec<(f32, f32)> = self.tracks.iter().map(|t| t.pixel).collect();
@@ -210,6 +242,7 @@ impl VioPipeline {
         }
         self.tracks = surviving;
         self.prev_pyramid = Some(curr_pyramid);
+        self.vision_time += track_start.elapsed();
 
         let prev_state = self.window.back().unwrap().state;
         let prev_timestamp = self.window.back().unwrap().timestamp_ns;
@@ -224,6 +257,7 @@ impl VioPipeline {
         }
         self.imu_buffer.clear();
 
+        let pnp_start = Instant::now();
         let vision_pose = if self.tracks.len() >= 6 {
             // PnP against currently tracked landmarks (reuses M3's well-
             // tested DLT + Gauss-Newton refine).
@@ -237,6 +271,7 @@ impl VioPipeline {
         } else {
             None
         };
+        self.vision_time += pnp_start.elapsed();
 
         let (initial_pose, initial_velocity, is_keyframe, recovered) = match vision_pose {
             Some(pose) => (pose, prev_state.velocity, self.frame_index.is_multiple_of(self.params.keyframe_stride), false),
@@ -274,7 +309,9 @@ impl VioPipeline {
         self.window.push_back(new_kf);
         let new_keyframe_idx = self.window.len() - 1;
 
+        let landmarks_start = Instant::now();
         self.add_new_landmarks(left, right, &new_state, new_keyframe_idx);
+        self.vision_time += landmarks_start.elapsed();
 
         if recovered && self.tracks.is_empty() {
             // Nothing to re-anchor to (e.g. a genuinely blank frame) —
@@ -290,7 +327,9 @@ impl VioPipeline {
             }
         }
 
+        let opt_start = Instant::now();
         self.run_optimization();
+        self.optimization_time += opt_start.elapsed();
 
         Some(VioFrameResult {
             pose_world_to_body: self.window.back().unwrap().state.pose,
@@ -415,6 +454,13 @@ impl VioPipeline {
     /// trajectory) remains the sole gauge anchor, same as every windowed
     /// `run_optimization` call along the way.
     pub fn global_bundle_adjustment(&mut self) -> usize {
+        let start = Instant::now();
+        let total = self.global_bundle_adjustment_inner();
+        self.global_ba_time += start.elapsed();
+        total
+    }
+
+    fn global_bundle_adjustment_inner(&mut self) -> usize {
         let mut local_landmark_ids: HashMap<usize, usize> = HashMap::new();
         let mut local_landmarks = Vec::new();
         let mut reprojection_obs = Vec::new();

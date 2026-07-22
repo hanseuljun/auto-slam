@@ -11,8 +11,11 @@ decoding, and parsing.
 It targets the EuRoC `machine_hall` stereo-inertial dataset
 (`MH_01_easy` .. `MH_05_difficult`), aiming for accuracy competitive with
 published stereo-inertial SLAM systems (ORB-SLAM3, OKVIS, VINS-Fusion,
-Kimera-VIO) — see [`plan/STAGE1.md`](plan/STAGE1.md) for the full milestone
-plan, scope, and accuracy target.
+Kimera-VIO), and — as of Stage 2 — real-time processing (1 second of
+sensor data processed in at most 1 second of wall-clock). Current plan:
+[`plan/STAGE2.md`](plan/STAGE2.md); [`plan/STAGE1.md`](plan/STAGE1.md) is
+the original 11-milestone plan (mostly done) that Stage 2 finishes and
+builds on.
 
 ## Status
 
@@ -20,23 +23,27 @@ Stage 1 milestones M0-M8 are done: stereo visual odometry, IMU
 preintegration/initialization, a sliding-window backend that jointly
 optimizes both, track-loss recovery verified across full, un-truncated
 real sequences, loop closure with a measurable, real-data accuracy win,
-and a global bundle-adjustment pass over the full trajectory. See
-[`plan/STAGE1.md`](plan/STAGE1.md) for the milestone list and
+and a global bundle-adjustment pass over the full trajectory. Stage 2's M0
+(evaluation + timing harness, finishing Stage 1's M9) is also done — see
+[`docs/RESULTS.md`](docs/RESULTS.md) for real, reproducible accuracy and
+real-time-factor numbers. See [`plan/STAGE1.md`](plan/STAGE1.md) and
+[`plan/STAGE2.md`](plan/STAGE2.md) for the full milestone lists and
 [`memory/progress/`](memory/progress/) for a session-by-session log of
 what landed and when.
 
 | Milestone | What it adds | Status |
 |---|---|---|
-| M0 | Workspace scaffold, EuRoC dataset I/O | Done |
-| M1 | Camera model, stereo rectification, triangulation, PnP | Done |
-| M2 | Image pyramid, FAST detector, Lucas-Kanade tracking | Done |
-| M3 | Stereo matching + VO pipeline, first ATE checkpoint | Done |
-| M4 | IMU preintegration + static/dynamic VI initialization | Done |
-| M5 | Sliding-window VIO backend (fuses M3's VO with M4's IMU) | Done |
-| M6 | Track-loss recovery, robustness, full-sequence runs | Done |
-| M7 | Loop closure (BoW, geometric verification, pose graph) | Done |
-| M8 | Global bundle adjustment over the full trajectory | Done |
-| M9-M10 | Evaluation harness, accuracy tuning | Not started |
+| Stage 1 M0 | Workspace scaffold, EuRoC dataset I/O | Done |
+| Stage 1 M1 | Camera model, stereo rectification, triangulation, PnP | Done |
+| Stage 1 M2 | Image pyramid, FAST detector, Lucas-Kanade tracking | Done |
+| Stage 1 M3 | Stereo matching + VO pipeline, first ATE checkpoint | Done |
+| Stage 1 M4 | IMU preintegration + static/dynamic VI initialization | Done |
+| Stage 1 M5 | Sliding-window VIO backend (fuses M3's VO with M4's IMU) | Done |
+| Stage 1 M6 | Track-loss recovery, robustness, full-sequence runs | Done |
+| Stage 1 M7 | Loop closure (BoW, geometric verification, pose graph) | Done |
+| Stage 1 M8 | Global bundle adjustment over the full trajectory | Done |
+| Stage 2 M0 | Evaluation + timing harness (finishes Stage 1 M9) | Done |
+| Stage 2 M1-M6 | Marginalization, analytic Jacobians, sparse solve, `rayon` parallelism, real-time validation, accuracy tuning (finishes Stage 1 M10) | Not started |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
@@ -74,6 +81,24 @@ short window-only clip leaves little "unfinished optimization" for a
 global pass to clean up (see `memory/progress/2026-07-21-m8-...md` for
 why a longer sequence, or a post-loop-closure run, is where global BA's
 real win should show up).
+
+Stage 2's M0 added `bin/slam-run` (below) and found two things worth
+knowing before trusting any of the numbers above too literally: (1) a
+real determinism bug — `slam-optim`'s solver used to accumulate landmark
+contributions via a `HashMap`, whose randomized-per-process iteration
+order made re-running the *identical* pipeline on the *identical*
+sequence produce different trajectories (three runs of the same 600-frame
+MH_01 clip gave three different keyframe counts before the fix); see
+`memory/decisions/0011` — fixed, and now bit-for-bit reproducible run to
+run; (2) the per-frame VIO loop (tracking + windowed optimization) is
+already close to Stage 2's real-time bar (factor 1.09-1.20 on two of
+three runnable sequences) even before any of Stage 2's planned
+speedups, while the global bundle-adjustment pass is wildly
+disproportionate (tens of seconds for a 30-second clip) — a direct,
+measured confirmation of why Stage 2 tackles marginalization before
+anything else. Full numbers, methodology, and honest caveats (two
+sequences don't run yet, pending initializer robustness work) in
+[`docs/RESULTS.md`](docs/RESULTS.md).
 
 ## Building
 
@@ -124,6 +149,24 @@ above is real, not just claimed):
 - a raw ground-truth trajectory summary (span, bounding box) as a sanity
   check on units/frame
 
+## Running the evaluation harness
+
+`bin/slam-run` (Stage 2's M0, finishing Stage 1's M9) is the dedicated
+accuracy/timing benchmarking tool — where `bin/slam-inspect` shows
+per-milestone intermediate state, `bin/slam-run` runs the full pipeline
+end to end and reports the numbers in [`docs/RESULTS.md`](docs/RESULTS.md).
+
+```
+cargo run --release --bin slam-run                       # all sequences, bounded default (~30s of data each)
+cargo run --release --bin slam-run -- --full              # full, un-truncated sequences (slow — see docs/RESULTS.md)
+cargo run --release --bin slam-run -- data/machine_hall/MH_01_easy  # one sequence
+```
+
+Writes `runs/<sequence>/trajectory.csv` (per-timestamp estimated vs.
+groundtruth position, for external plotting) and `runs/summary.csv` (the
+aggregate ATE/RPE/timing table) — both gitignored, regenerate them
+locally rather than trusting stale copies.
+
 ## Testing
 
 ```
@@ -145,9 +188,13 @@ crates/           # slam-core, slam-dataset, slam-vision, slam-geometry,
                    # slam-imu, slam-optim, slam-frontend, slam-backend,
                    # slam-loopclosure, slam-eval — see plan/STAGE1.md for
                    # what each is responsible for and in which milestone
-bin/slam-inspect/  # the test app described above
+bin/slam-inspect/  # per-milestone intermediate-state test app
+bin/slam-run/      # accuracy/timing evaluation harness (Stage 2 M0)
 data/              # EuRoC dataset (gitignored, not in this repo)
-plan/STAGE1.md     # full milestone plan, scope, and accuracy target
+docs/RESULTS.md    # accuracy + real-time-factor numbers vs. published SOTA
+runs/              # bin/slam-run's output (gitignored, regenerate locally)
+plan/STAGE1.md     # original 11-milestone plan (mostly done)
+plan/STAGE2.md     # current plan: real-time VIO + finishing Stage 1
 memory/            # cross-session project memory (progress log, design
                    # decisions, gotchas) — see memory/README.md
 ```
