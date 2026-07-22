@@ -61,3 +61,15 @@ re-derive this from scratch; generalize what's already there. Re-run
 marginalization actually improves ATE, not just "runs without crashing" —
 per the plan's own framing, it should be a real accuracy lever, and if it
 isn't, that's worth understanding before moving on.
+
+## Closed (Stage 2 M1)
+
+Real marginalization landed in `plan/STAGE2.md`'s M1 —
+`slam_optim::marginalize_keyframe` + `slam_backend::VioPipeline::
+marginalize_evicted_keyframe`. On the real-data checkpoint this
+session's clip didn't show a large accuracy win (consistent with M8's
+own earlier finding that short clips leave little for an information-
+retention pass to clean up), but it's now real, not naive-drop, and
+didn't regress. See `memory/progress/2026-07-21-stage2-m1-
+marginalization.md` and `decisions/0012`-`0014` for the (substantial)
+real-data debugging story getting it safe.

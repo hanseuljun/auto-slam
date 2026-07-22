@@ -116,11 +116,13 @@ mod tests {
         );
         // M3's VO-only checkpoint got ~0.137m RMSE over 128 frames on this
         // exact sequence/clip. This is a much coarser keyframe trajectory
-        // (stride 10, naive fixed-lag window, ad hoc noise weights, no
-        // marginalization — see memory/decisions), so the bar here is
-        // "plausible and not diverging," not "beats M3 outright" yet;
-        // M10's accuracy closing pass is where real noise weighting and
-        // marginalization should close this gap.
+        // (stride 10, ad hoc noise weights — see memory/decisions), so the
+        // bar here is "plausible and not diverging," not "beats M3
+        // outright" yet; Stage 2 M6's accuracy closing pass (finishing
+        // Stage 1's M10) is where real covariance-derived noise weighting
+        // should close this gap. Marginalization (Stage 2 M1) is done and
+        // wired in, but a short clip like this doesn't show its benefit
+        // clearly either — see decisions/0007's "closed" note.
         assert!(stats.rmse < 1.5, "VIO ATE RMSE unexpectedly large: {}", stats.rmse);
     }
 

@@ -37,6 +37,23 @@ impl KeyframeState {
             bias_accel: self.bias_accel + delta.fixed_rows::<3>(12),
         }
     }
+
+    /// The exact inverse of `retract`: the tangent-space delta `d` such
+    /// that `x0.retract(&d)` reproduces `self`. Used by marginalization's
+    /// prior factor (Stage 2 M1) to express a residual relative to the
+    /// state at which the prior was linearized — `self.local(x0)` and
+    /// `x0.retract(&delta)` round-trip exactly (not just to first order),
+    /// since SE3 `exp`/`log` and vector addition/subtraction are exact
+    /// inverses of each other by construction.
+    pub fn local(&self, x0: &KeyframeState) -> SVector<f64, STATE_DIM> {
+        let pose_delta = self.pose.compose(&x0.pose.inverse()).log();
+        let mut delta = SVector::<f64, STATE_DIM>::zeros();
+        delta.fixed_rows_mut::<6>(0).copy_from(&pose_delta);
+        delta.fixed_rows_mut::<3>(6).copy_from(&(self.velocity - x0.velocity));
+        delta.fixed_rows_mut::<3>(9).copy_from(&(self.bias_gyro - x0.bias_gyro));
+        delta.fixed_rows_mut::<3>(12).copy_from(&(self.bias_accel - x0.bias_accel));
+        delta
+    }
 }
 
 #[cfg(test)]
@@ -72,5 +89,31 @@ mod tests {
         assert_relative_eq!(retracted.velocity, Vector3::new(0.5, 0.0, 0.0), epsilon = 1e-12);
         assert_relative_eq!(retracted.bias_gyro, Vector3::new(0.1, 0.0, 0.0), epsilon = 1e-12);
         assert_relative_eq!(retracted.bias_accel, Vector3::new(-0.2, 0.0, 0.0), epsilon = 1e-12);
+    }
+
+    #[test]
+    fn local_and_retract_are_exact_inverses() {
+        let x0 = KeyframeState::new(
+            SE3::new(SO3::exp(Vector3::new(0.1, -0.2, 0.05)), Vector3::new(1.0, 2.0, 3.0)),
+            Vector3::new(0.5, 0.1, -0.2),
+            Vector3::new(0.01, 0.02, -0.01),
+            Vector3::new(0.05, -0.03, 0.02),
+        );
+        let delta = SVector::<f64, STATE_DIM>::from_fn(|i, _| 0.05 + 0.01 * i as f64);
+
+        // retract then local recovers the same delta.
+        let x = x0.retract(&delta);
+        let recovered = x.local(&x0);
+        assert_relative_eq!(recovered, delta, epsilon = 1e-9);
+
+        // local then retract recovers the same state.
+        let roundtrip = x0.retract(&x.local(&x0));
+        assert_relative_eq!(roundtrip.pose.matrix(), x.pose.matrix(), epsilon = 1e-9);
+        assert_relative_eq!(roundtrip.velocity, x.velocity, epsilon = 1e-9);
+        assert_relative_eq!(roundtrip.bias_gyro, x.bias_gyro, epsilon = 1e-9);
+        assert_relative_eq!(roundtrip.bias_accel, x.bias_accel, epsilon = 1e-9);
+
+        // local of a state against itself is exactly zero.
+        assert_relative_eq!(x0.local(&x0), SVector::<f64, STATE_DIM>::zeros(), epsilon = 1e-12);
     }
 }

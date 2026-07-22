@@ -29,6 +29,33 @@ pub struct BiasRwFactorSpec {
     pub j: usize,
 }
 
+/// A linearized Gaussian prior over one keyframe's 15-dim state, produced
+/// by marginalizing an older keyframe out of a sliding window (Stage 2 M1,
+/// closing `decisions/0007`) instead of dropping it outright. Stored in
+/// information form (`information` = the marginalized information matrix
+/// `Lambda`, `information_vector` = `Lambda * (x_marginalization_solve
+/// ⊟ linearization_point)`, both already expressed relative to
+/// `linearization_point`) rather than as a residual/Jacobian pair,
+/// because that's what falls out of the Schur complement directly
+/// (`crate::marginalization::marginalize_keyframe`) — see that module for
+/// the derivation.
+///
+/// This factor is re-linearized every LM iteration using the keyframe's
+/// *current* estimate (`KeyframeState::local` against `linearization_point`)
+/// but with the *Jacobian held fixed* at `information`/`information_vector`
+/// (a First-Estimate-Jacobian/FEJ scheme, standard practice for
+/// marginalization priors — re-deriving the Jacobian from the current
+/// estimate instead would double-count information already baked into the
+/// prior and bias the solution, a well-known failure mode of naive
+/// re-linearization).
+#[derive(Debug, Clone, Copy)]
+pub struct PriorFactor {
+    pub keyframe_idx: usize,
+    pub linearization_point: KeyframeState,
+    pub information: SMatrix<f64, STATE_DIM, STATE_DIM>,
+    pub information_vector: SVector<f64, STATE_DIM>,
+}
+
 /// Ad hoc (not covariance-propagated) isotropic information weights for
 /// each residual type, plus the Huber threshold for reprojection
 /// residuals. `plan/STAGE1.md` explicitly earmarks replacing these with
@@ -66,21 +93,41 @@ impl Default for SolverConfig {
     }
 }
 
-/// A sliding-window bundle-adjustment-style problem: `keyframes[0]` is
-/// held fixed (the gauge anchor — see `memory/decisions` for why a single
-/// fixed pose is used instead of a full null-space projection);
-/// `keyframes[1..]` and all `landmarks` are optimized.
+/// A sliding-window bundle-adjustment-style problem. Gauge fixing: if
+/// `priors` contains an entry for `keyframe_idx == 0`, keyframe 0 is
+/// *free* (optimized), constrained only by that prior — the standard
+/// setup once marginalization has folded everything before the window
+/// into a prior on its oldest surviving keyframe. Otherwise (no prior on
+/// keyframe 0 — the very first window of a whole trajectory, before
+/// anything has ever been marginalized) `keyframes[0]` is held fixed as
+/// the gauge anchor (see `memory/decisions` for why a single fixed pose
+/// is used instead of a full null-space projection). `keyframes[1..]`
+/// and all `landmarks` are always optimized.
 pub struct Problem {
     pub keyframes: Vec<KeyframeState>,
     pub landmarks: Vec<Vector3<f64>>,
     pub reprojection_obs: Vec<ReprojectionObservation>,
     pub imu_factors: Vec<ImuFactorSpec>,
     pub bias_rw_factors: Vec<BiasRwFactorSpec>,
+    pub priors: Vec<PriorFactor>,
     pub gravity_world: Vector3<f64>,
 }
 
-fn free_index(keyframe_idx: usize) -> Option<usize> {
-    keyframe_idx.checked_sub(1)
+fn has_prior_on_zero(problem: &Problem) -> bool {
+    problem.priors.iter().any(|p| p.keyframe_idx == 0)
+}
+
+/// `None` for a keyframe that's the fixed gauge anchor (not represented
+/// in `h_pp`/`b_p` at all); `Some(free_idx)` — a row/column block index
+/// into `h_pp`/`b_p` — otherwise. `keyframe_idx == 0` is only ever the
+/// anchor when the problem has no prior pinning it down some other way
+/// (see `Problem`'s doc comment).
+fn free_index(anchored: bool, keyframe_idx: usize) -> Option<usize> {
+    if anchored {
+        keyframe_idx.checked_sub(1)
+    } else {
+        Some(keyframe_idx)
+    }
 }
 
 /// Adds `block` into `h`'s `(row, col)` sub-block, for any statically- or
@@ -148,6 +195,13 @@ fn compute_cost(problem: &Problem, config: &SolverConfig) -> f64 {
         let w = sqrt_reproj_w * huber_weight(weighted_norm, config.huber_delta);
         cost += (r * w).norm_squared();
     }
+    for prior in &problem.priors {
+        let delta = problem.keyframes[prior.keyframe_idx].local(&prior.linearization_point);
+        // The FEJ-linearized quadratic cost `delta^T Lambda delta - 2 b^T
+        // delta` (the true constant term is dropped — LM only ever
+        // compares costs *relatively*, so it cancels).
+        cost += (delta.transpose() * prior.information * delta)[0] - 2.0 * prior.information_vector.dot(&delta);
+    }
     cost
 }
 
@@ -156,7 +210,8 @@ fn compute_cost(problem: &Problem, config: &SolverConfig) -> f64 {
 /// (`h_ll_inv`, `b_l`, `h_lp`) to back-substitute landmark updates once
 /// the reduced system is solved for a pose delta.
 fn build_normal_equations(problem: &Problem, config: &SolverConfig) -> NormalEquations {
-    let num_free = problem.keyframes.len() - 1;
+    let anchored = !has_prior_on_zero(problem);
+    let num_free = if anchored { problem.keyframes.len() - 1 } else { problem.keyframes.len() };
     let dim = num_free * STATE_DIM;
     let mut h_pp = DMatrix::<f64>::zeros(dim, dim);
     let mut b_p = DVector::<f64>::zeros(dim);
@@ -172,7 +227,7 @@ fn build_normal_equations(problem: &Problem, config: &SolverConfig) -> NormalEqu
         let wr = r.component_mul(&sqrt_w);
         let wji = SMatrix::<f64, 9, STATE_DIM>::from_fn(|r, c| jac_i[(r, c)] * sqrt_w[r]);
         let wjj = SMatrix::<f64, 9, STATE_DIM>::from_fn(|r, c| jac_j[(r, c)] * sqrt_w[r]);
-        accumulate_pair(&mut h_pp, &mut b_p, free_index(f.i), free_index(f.j), &wji, &wjj, &wr);
+        accumulate_pair(&mut h_pp, &mut b_p, free_index(anchored, f.i), free_index(anchored, f.j), &wji, &wjj, &wr);
     }
 
     for f in &problem.bias_rw_factors {
@@ -181,7 +236,24 @@ fn build_normal_equations(problem: &Problem, config: &SolverConfig) -> NormalEqu
         let wr = r * w;
         let wji = jac_i * w;
         let wjj = jac_j * w;
-        accumulate_pair(&mut h_pp, &mut b_p, free_index(f.i), free_index(f.j), &wji, &wjj, &wr);
+        accumulate_pair(&mut h_pp, &mut b_p, free_index(anchored, f.i), free_index(anchored, f.j), &wji, &wjj, &wr);
+    }
+
+    // BTreeMap iteration order doesn't matter here (each prior only ever
+    // touches its own keyframe_idx's diagonal block, never a cross term
+    // shared with another prior), but `priors` is a plain Vec anyway.
+    for prior in &problem.priors {
+        if let Some(fk) = free_index(anchored, prior.keyframe_idx) {
+            let delta = problem.keyframes[prior.keyframe_idx].local(&prior.linearization_point);
+            let rk = fk * STATE_DIM;
+            add_block(&mut h_pp, rk, rk, &prior.information);
+            // b_p += information_vector - information * delta (the FEJ
+            // gradient contribution derived in PriorFactor's doc comment).
+            let contribution = prior.information_vector - prior.information * delta;
+            for r in 0..STATE_DIM {
+                b_p[rk + r] += contribution[r];
+            }
+        }
     }
 
     // BTreeMap, not HashMap: iterated below to accumulate into the shared
@@ -214,7 +286,7 @@ fn build_normal_equations(problem: &Problem, config: &SolverConfig) -> NormalEqu
             h_ll += wjl.transpose() * wjl;
             b_l += -(wjl.transpose() * wr);
 
-            if let Some(fk) = free_index(obs.keyframe_idx) {
+            if let Some(fk) = free_index(anchored, obs.keyframe_idx) {
                 *h_lp.entry(fk).or_insert_with(SMatrix::<f64, 3, STATE_DIM>::zeros) += wjl.transpose() * wjp;
 
                 let rk = fk * STATE_DIM;
@@ -264,8 +336,11 @@ fn accumulate_pair<const N: usize>(h_pp: &mut DMatrix<f64>, b_p: &mut DVector<f6
 
 /// Runs Levenberg-Marquardt (with per-iteration Schur-complement landmark
 /// elimination) on `problem` in place. `problem.keyframes[0]` is never
-/// modified. Returns the final cost.
+/// modified *unless* `problem.priors` pins it down instead of the usual
+/// fixed-anchor convention (see `Problem`'s doc comment). Returns the
+/// final cost.
 pub fn optimize(problem: &mut Problem, config: &SolverConfig) -> f64 {
+    let anchored = !has_prior_on_zero(problem);
     let mut lambda = config.initial_lambda;
     let mut current_cost = compute_cost(problem, config);
 
@@ -289,8 +364,10 @@ pub fn optimize(problem: &mut Problem, config: &SolverConfig) -> f64 {
         let backup_keyframes = problem.keyframes.clone();
         let backup_landmarks = problem.landmarks.clone();
 
-        for k in 1..problem.keyframes.len() {
-            let d = SVector::<f64, STATE_DIM>::from_column_slice(delta.rows((k - 1) * STATE_DIM, STATE_DIM).as_slice());
+        let first_free = if anchored { 1 } else { 0 };
+        for k in first_free..problem.keyframes.len() {
+            let free_idx = k - first_free;
+            let d = SVector::<f64, STATE_DIM>::from_column_slice(delta.rows(free_idx * STATE_DIM, STATE_DIM).as_slice());
             problem.keyframes[k] = problem.keyframes[k].retract(&d);
         }
         for (&landmark_idx, schur) in &ne.landmark_schur {
@@ -398,6 +475,7 @@ mod tests {
             reprojection_obs,
             imu_factors,
             bias_rw_factors,
+            priors: Vec::new(),
             gravity_world: g_true,
         };
 
@@ -507,6 +585,7 @@ mod tests {
             reprojection_obs: forward_obs,
             imu_factors: imu_factors.iter().map(|f| ImuFactorSpec { i: f.i, j: f.j, preint: f.preint.clone(), dt: f.dt }).collect(),
             bias_rw_factors: (0..num_keyframes - 1).map(|k| BiasRwFactorSpec { i: k, j: k + 1 }).collect(),
+            priors: Vec::new(),
             gravity_world: g_true,
         };
         optimize(&mut problem_forward, &config);
@@ -522,6 +601,7 @@ mod tests {
             reprojection_obs: reversed_obs,
             imu_factors,
             bias_rw_factors,
+            priors: Vec::new(),
             gravity_world: g_true,
         };
         optimize(&mut problem_reversed, &config);

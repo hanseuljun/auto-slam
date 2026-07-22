@@ -4,6 +4,7 @@ One line per entry, newest first within each section. See `README.md` for
 what goes where.
 
 ## progress/
+- [2026-07-21-stage2-m1-marginalization.md](progress/2026-07-21-stage2-m1-marginalization.md) — Stage 2 M1 done: real Schur-complement keyframe marginalization (closes decisions/0007). Found and fixed three real bugs, including a latent VioPipeline vulnerability decisions/0009 had explicitly predicted.
 - [2026-07-21-stage2-m0-evaluation-and-timing-harness.md](progress/2026-07-21-stage2-m0-evaluation-and-timing-harness.md) — Stage 2 M0 done: bin/slam-run + docs/RESULTS.md (accuracy + real-time factor vs. published SOTA). Found and fixed a real determinism bug (HashMap iteration order, decisions/0011) along the way.
 - [2026-07-21-stage2-plan.md](progress/2026-07-21-stage2-plan.md) — wrote `plan/STAGE2.md`: real-time VIO (factor <=1.0) + finishing Stage 1's M9/M10, after a rolled-back M9 attempt found global BA's dense O(n^3) solve doesn't scale (decisions/0007's unbounded history is the root cause).
 - [2026-07-21-m8-global-bundle-adjustment.md](progress/2026-07-21-m8-global-bundle-adjustment.md) — M8 done: global BA over the full retained trajectory, reusing slam-optim's Problem/optimize. ATE held (0.1366m→0.1377m) on a short loop-free MH_01 clip — expected; a real win likely needs a longer sequence and/or post-loop-closure.
@@ -18,6 +19,9 @@ what goes where.
 - [2026-07-20-stage1-plan.md](progress/2026-07-20-stage1-plan.md) — wrote `plan/STAGE1.md`, set up CLAUDE.md + this memory directory; no pipeline code yet.
 
 ## decisions/
+- [0014-vio-pipeline-gets-the-pose-jump-guard-decisions-0009-predicted.md](decisions/0014-vio-pipeline-gets-the-pose-jump-guard-decisions-0009-predicted.md) — VioPipeline now rejects implausible PnP pose jumps too (same fix as VoPipeline's decisions/0009), closing a gap that decision explicitly predicted — the real root cause behind M1's marginalization divergence.
+- [0013-marginalization-guards-against-implausible-pose-jumps.md](decisions/0013-marginalization-guards-against-implausible-pose-jumps.md) — marginalization rejects an implausible keyframe-to-keyframe pose jump or non-finite prior result instead of folding it in — naive-drop used to just forget a bad pose, marginalization would otherwise lock it in and diverge.
+- [0012-marginalization-excludes-still-tracked-landmarks.md](decisions/0012-marginalization-excludes-still-tracked-landmarks.md) — marginalization only eliminates a landmark if the live LK tracker (self.tracks), not just other keyframes, no longer needs it — folding in a still-tracked landmark froze its position and degraded future PnP.
 - [0011-solver-uses-btreemap-not-hashmap-for-determinism.md](decisions/0011-solver-uses-btreemap-not-hashmap-for-determinism.md) — slam-optim's solver switched from HashMap to BTreeMap: HashMap's randomized-per-process iteration order made identical runs on identical input produce different trajectories, a real violation of Stage 1's determinism requirement.
 - [0009-vo-rejects-implausible-pose-jumps.md](decisions/0009-vo-rejects-implausible-pose-jumps.md) — VoPipeline now rejects PnP poses implying implausible translation jumps; a real corruption found by M7's full-MH_05 test, invisible to M6's own Sim3-aligned ATE checkpoint.
 - [0008-loop-closure-descriptor-matching-needs-ratio-test.md](decisions/0008-loop-closure-descriptor-matching-needs-ratio-test.md) — M7's descriptor matching needed a Lowe's-ratio-test filter, not just an absolute Hamming threshold, to get real geometric verification working on MH_05.

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use image::GrayImage;
@@ -8,7 +8,7 @@ use slam_dataset::ImuSample;
 use slam_frontend::{match_stereo_keypoints, StereoMatchParams};
 use slam_geometry::{estimate_pose_dlt, refine_pose_gauss_newton, StereoRectification, StereoRig};
 use slam_imu::Preintegration;
-use slam_optim::{optimize, BiasRwFactorSpec, ImuFactorSpec, KeyframeState, Problem, ReprojectionObservation, SolverConfig};
+use slam_optim::{marginalize_keyframe, optimize, BiasRwFactorSpec, ImuFactorSpec, KeyframeState, MarginalizationInput, PriorFactor, Problem, ReprojectionObservation, SolverConfig, UniqueLandmarkObservation};
 use slam_vision::{detect_grid, track_pyramid, ImagePyramid, LkParams};
 
 #[derive(Debug, Clone, Copy)]
@@ -19,6 +19,20 @@ pub struct VioParams {
     pub grid_cell_size: u32,
     pub max_keypoints_per_cell: usize,
     pub min_new_landmark_pixel_distance: f32,
+    /// Sanity bound on the PnP-derived pose jump *per frame* (~20Hz,
+    /// `VoParams::max_pose_jump_meters`'s exact counterpart, `decisions/
+    /// 0009`) — the root-cause fix: rejects an implausible PnP result
+    /// before it ever enters the window at all.
+    pub max_pose_jump_meters: f64,
+    /// A second, looser sanity bound at the marginalization boundary
+    /// itself (keyframe-to-keyframe, ~10x the frame interval, so a looser
+    /// threshold than `max_pose_jump_meters`) — defense in depth: catches
+    /// anything that still reaches an eviction implausibly displaced
+    /// (e.g. from many chained track-loss recoveries) before folding it
+    /// into a prior that would otherwise retain it indefinitely instead of
+    /// naive-drop's "forgotten at the next eviction" behavior. See
+    /// `marginalize_evicted_keyframe`'s doc comment.
+    pub max_marginalization_pose_jump_meters: f64,
     pub lk: LkParams,
     pub stereo: StereoMatchParams,
     pub solver: SolverConfig,
@@ -33,6 +47,8 @@ impl Default for VioParams {
             grid_cell_size: 40,
             max_keypoints_per_cell: 3,
             min_new_landmark_pixel_distance: 12.0,
+            max_pose_jump_meters: 2.0,
+            max_marginalization_pose_jump_meters: 10.0,
             lk: LkParams::default(),
             stereo: StereoMatchParams::default(),
             solver: SolverConfig::default(),
@@ -115,10 +131,14 @@ pub struct VioFrameResult {
 /// adding reprojection factors for tracked/newly-triangulated landmarks,
 /// and jointly optimizing the whole window via `slam_optim`.
 ///
-/// The window is naive fixed-lag (oldest keyframe dropped when full, no
-/// marginalization prior folding its information into the rest) — see
-/// `memory/decisions` for why real marginalization was scoped out of this
-/// first working version.
+/// The window is a real marginalized sliding window (Stage 2 M1, closing
+/// `decisions/0007`): when the oldest keyframe slides out, it's Schur-
+/// complemented into a `PriorFactor` on the new oldest keyframe
+/// (`marginalize_evicted_keyframe`) instead of being dropped outright —
+/// its IMU/bias-random-walk connectivity and any landmarks *only it*
+/// observed are folded in; landmarks it shares with a still-active
+/// keyframe simply lose its contribution (a documented simplification,
+/// see `marginalize_evicted_keyframe`'s doc comment).
 pub struct VioPipeline {
     rig: StereoRig,
     rect: StereoRectification,
@@ -129,11 +149,22 @@ pub struct VioPipeline {
     landmarks: Vec<Vector3<f64>>,
     tracks: Vec<Track>,
     window: VecDeque<WindowKeyframe>,
-    /// Keyframes that have slid out of `window` (M5's naive fixed-lag
-    /// dropping, `decisions/0007`) are kept here instead of discarded,
-    /// purely so a later `global_bundle_adjustment` pass (M8) has the
-    /// full trajectory's observations to work with — `run_optimization`
-    /// itself never looks at this, only the current `window`.
+    /// The prior folding in everything marginalized out of the window so
+    /// far, attached to `window[0]` (`None` only before the window has
+    /// ever evicted a keyframe — i.e. `window[0]` is still the whole
+    /// trajectory's true first keyframe). Included as an extra factor in
+    /// every `run_optimization` call, and replaced (not just added to)
+    /// whenever `window[0]` itself gets marginalized in turn.
+    prior: Option<PriorFactor>,
+    /// Keyframes that have slid out of `window` are kept here purely so a
+    /// later `global_bundle_adjustment` pass (M8) has the full
+    /// trajectory's observations to work with — `run_optimization` itself
+    /// never looks at this, only the current `window` + `prior`. Now
+    /// partly redundant with marginalization's own compact `prior` for
+    /// the windowed path specifically; left as-is since `global_bundle_
+    /// adjustment` still needs the raw per-keyframe observations
+    /// (reconciling the two is a good follow-up, not required for M1's
+    /// own checkpoint — see `memory/decisions`).
     history: Vec<WindowKeyframe>,
     prev_pyramid: Option<ImagePyramid>,
     imu_buffer: Vec<ImuSample>,
@@ -181,6 +212,7 @@ impl VioPipeline {
                 });
                 w
             },
+            prior: None,
             history: Vec::new(),
             prev_pyramid: None,
             imu_buffer: Vec::new(),
@@ -267,7 +299,28 @@ impl VioPipeline {
                 .iter()
                 .map(|t| self.rig.cam0.unproject_to_normalized(Vector2::new(t.pixel.0 as f64, t.pixel.1 as f64)))
                 .collect();
-            estimate_pose_dlt(&points_world, &observations).map(|initial| refine_pose_gauss_newton(&points_world, &observations, initial, 10))
+            // Same DLT-PnP-can-occasionally-produce-a-wildly-wrong-pose
+            // vulnerability `decisions/0009` found and fixed in
+            // `VoPipeline` (no RANSAC/outlier rejection, `decisions/0003`)
+            // — VioPipeline shares the identical PnP call and was
+            // predicted there to need the same guard "if a similar
+            // corruption shows up in a future full-VIO-sequence test." It
+            // did: validating Stage 2 M1's marginalization surfaced a real
+            // divergence (an implausible-jump pose entering the window,
+            // then propagating through subsequent frames) that was always
+            // latent here, just never caught before — naive fixed-lag
+            // dropping happened to "forget" the corrupt keyframe quickly
+            // enough that Sim3-aligned ATE stayed plausible-looking
+            // (`decisions/0009`'s own caveat about that metric), but
+            // marginalization's job is to *retain* information, so it
+            // retained the corruption too. Filtering it out here, at the
+            // source, fixes it for both paths.
+            estimate_pose_dlt(&points_world, &observations)
+                .map(|initial| refine_pose_gauss_newton(&points_world, &observations, initial, 10))
+                .filter(|pose| {
+                    let jump = (pose.inverse().translation - prev_state.pose.inverse().translation).norm();
+                    jump.is_finite() && jump < self.params.max_pose_jump_meters
+                })
         } else {
             None
         };
@@ -323,6 +376,7 @@ impl VioPipeline {
 
         if self.window.len() > self.params.window_size {
             if let Some(evicted) = self.window.pop_front() {
+                self.marginalize_evicted_keyframe(&evicted);
                 self.history.push(evicted);
             }
         }
@@ -378,6 +432,94 @@ impl VioPipeline {
         }
     }
 
+    /// Schur-complements `evicted` (just popped from the front of
+    /// `window`) into a new `PriorFactor` on the new `window[0]`,
+    /// replacing `self.prior` (Stage 2 M1, closing `decisions/0007`).
+    ///
+    /// Landmarks `evicted` shares with a still-active window keyframe, or
+    /// that `self.tracks` (the live, frame-by-frame LK tracker, not just
+    /// keyframe observations) is still actively following, are *not*
+    /// folded in — only landmarks *nothing* still needs. Folding in a
+    /// landmark `self.tracks` still references was a real bug found while
+    /// validating this milestone: its position in `self.landmarks` would
+    /// freeze forever (marginalization eliminates it from the optimizer
+    /// entirely), while future frames kept using that frozen, increasingly
+    /// stale position for PnP. Landmarks are also only folded in when
+    /// `evicted` itself recorded a genuine stereo pair for them (>= 2
+    /// observations at `evicted`): one with only a monocular "still
+    /// tracking it" entry (its real stereo pair was created at an even
+    /// earlier, already-marginalized keyframe) gives a rank-deficient,
+    /// poorly-conditioned contribution on its own — safer to drop, same
+    /// as the shared-landmark case.
+    ///
+    /// Guards against a second real bug found validating this milestone:
+    /// naive fixed-lag dropping (the old behavior) *forgets* a keyframe
+    /// whose pose went implausibly wrong (a rare but real DLT-PnP failure
+    /// mode, `decisions/0009`) the moment it slides out of the window —
+    /// marginalization instead *locks it in* as an increasingly confident
+    /// prior with nothing to correct it, which measurably diverged to
+    /// absurd (multi-kilometer, then multi-trillion-meter) poses within
+    /// ~100 frames on a real MH_01 run before this guard existed. If the
+    /// relative jump between `evicted` and the new oldest keyframe is
+    /// implausible, or the resulting prior isn't finite, this keyframe's
+    /// information is dropped instead of folded in (falling back to
+    /// naive-drop behavior for just this one eviction, and resetting
+    /// `self.prior` to `None` rather than keeping a now-stale one) —
+    /// exactly the same "reject, don't propagate" discipline `decisions/
+    /// 0009` established for raw PnP results, applied at the
+    /// marginalization boundary too.
+    fn marginalize_evicted_keyframe(&mut self, evicted: &WindowKeyframe) {
+        let Some(new_oldest) = self.window.front() else {
+            return;
+        };
+
+        let pose_jump = (evicted.state.pose.inverse().translation - new_oldest.state.pose.inverse().translation).norm();
+        if !pose_jump.is_finite() || pose_jump > self.params.max_marginalization_pose_jump_meters {
+            self.prior = None;
+            return;
+        }
+
+        // BTreeMap, not HashMap: `unique_landmarks`' iteration order below
+        // feeds `slam_optim::marginalize_keyframe`'s own accumulation into
+        // a shared matrix (floating-point addition isn't associative) —
+        // same determinism discipline as `decisions/0011`.
+        let mut by_landmark: BTreeMap<usize, Vec<&Observation>> = BTreeMap::new();
+        for obs in &evicted.observations {
+            by_landmark.entry(obs.landmark_id).or_default().push(obs);
+        }
+
+        let still_observed: std::collections::HashSet<usize> = self.window.iter().flat_map(|kf| kf.observations.iter().map(|o| o.landmark_id)).chain(self.tracks.iter().map(|t| t.landmark_id)).collect();
+
+        let unique_landmarks: Vec<UniqueLandmarkObservation> = by_landmark
+            .into_iter()
+            .filter(|(landmark_id, obs_list)| !still_observed.contains(landmark_id) && obs_list.len() >= 2)
+            .map(|(landmark_id, obs_list)| {
+                let observations = obs_list
+                    .into_iter()
+                    .map(|o| {
+                        let t_bs_cam = match o.camera {
+                            Camera::Cam0 => self.rig.t_bs_cam0,
+                            Camera::Cam1 => self.rig.t_bs_cam1,
+                        };
+                        (t_bs_cam, o.normalized)
+                    })
+                    .collect();
+                UniqueLandmarkObservation { landmark: self.landmarks[landmark_id], observations }
+            })
+            .collect();
+
+        let input = MarginalizationInput {
+            state_k: evicted.state,
+            state_k1: new_oldest.state,
+            incoming_prior: self.prior,
+            imu_edge: new_oldest.imu_edge.clone(),
+            unique_landmarks,
+            gravity_world: self.gravity_world,
+            config: self.params.solver,
+        };
+        self.prior = marginalize_keyframe(&input).filter(|p| p.information.iter().all(|v| v.is_finite()) && p.information_vector.iter().all(|v| v.is_finite()));
+    }
+
     fn run_optimization(&mut self) {
         let mut local_landmark_ids: HashMap<usize, usize> = HashMap::new();
         let mut local_landmarks = Vec::new();
@@ -421,6 +563,7 @@ impl VioPipeline {
             reprojection_obs,
             imu_factors,
             bias_rw_factors,
+            priors: self.prior.into_iter().collect(),
             gravity_world: self.gravity_world,
         };
 
@@ -499,6 +642,11 @@ impl VioPipeline {
             reprojection_obs,
             imu_factors,
             bias_rw_factors,
+            // Global BA always includes the whole trajectory back to its
+            // true first keyframe (history[0]), which is still the gauge
+            // anchor here — the incremental `self.prior` is for the
+            // windowed path only.
+            priors: Vec::new(),
             gravity_world: self.gravity_world,
         };
 

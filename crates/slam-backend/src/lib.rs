@@ -1,7 +1,6 @@
-//! Sliding-window visual-inertial optimization and marginalization
-//! (Stage 1 milestone M5). The window is currently naive fixed-lag (see
-//! `memory/decisions` for why real marginalization was scoped out of this
-//! first working version).
+//! Sliding-window visual-inertial optimization (Stage 1 milestone M5)
+//! with real Schur-complement keyframe marginalization (Stage 2 M1,
+//! closing `decisions/0007`) instead of naive fixed-lag dropping.
 
 mod tests_integration;
 mod vio;

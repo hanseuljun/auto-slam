@@ -24,9 +24,10 @@ preintegration/initialization, a sliding-window backend that jointly
 optimizes both, track-loss recovery verified across full, un-truncated
 real sequences, loop closure with a measurable, real-data accuracy win,
 and a global bundle-adjustment pass over the full trajectory. Stage 2's M0
-(evaluation + timing harness, finishing Stage 1's M9) is also done — see
-[`docs/RESULTS.md`](docs/RESULTS.md) for real, reproducible accuracy and
-real-time-factor numbers. See [`plan/STAGE1.md`](plan/STAGE1.md) and
+(evaluation + timing harness, finishing Stage 1's M9) and M1 (real
+sliding-window marginalization, closing `decisions/0007`) are also done —
+see [`docs/RESULTS.md`](docs/RESULTS.md) for real, reproducible accuracy
+and real-time-factor numbers. See [`plan/STAGE1.md`](plan/STAGE1.md) and
 [`plan/STAGE2.md`](plan/STAGE2.md) for the full milestone lists and
 [`memory/progress/`](memory/progress/) for a session-by-session log of
 what landed and when.
@@ -43,7 +44,8 @@ what landed and when.
 | Stage 1 M7 | Loop closure (BoW, geometric verification, pose graph) | Done |
 | Stage 1 M8 | Global bundle adjustment over the full trajectory | Done |
 | Stage 2 M0 | Evaluation + timing harness (finishes Stage 1 M9) | Done |
-| Stage 2 M1-M6 | Marginalization, analytic Jacobians, sparse solve, `rayon` parallelism, real-time validation, accuracy tuning (finishes Stage 1 M10) | Not started |
+| Stage 2 M1 | Sliding-window marginalization (closes Stage 1 `decisions/0007`) | Done |
+| Stage 2 M2-M6 | Analytic Jacobians, sparse solve, `rayon` parallelism, real-time validation, accuracy tuning (finishes Stage 1 M10) | Not started |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
@@ -99,6 +101,28 @@ measured confirmation of why Stage 2 tackles marginalization before
 anything else. Full numbers, methodology, and honest caveats (two
 sequences don't run yet, pending initializer robustness work) in
 [`docs/RESULTS.md`](docs/RESULTS.md).
+
+Stage 2's M1 replaced the naive fixed-lag window (`decisions/0007`) with
+real Schur-complement marginalization — the departing keyframe's IMU/
+bias-random-walk connectivity and uniquely-observed landmarks fold into a
+compact prior instead of being dropped. Getting this safe on real data
+found three more real bugs (`memory/decisions/0012`-`0014`), the most
+significant of which turned out to be a latent bug in `VioPipeline`
+itself, unrelated to marginalization's own math: it never got the raw-PnP
+pose-jump sanity check `VoPipeline` gained in M7 (`decisions/0009`) — a
+gap that decision had explicitly predicted would eventually matter.
+Naive-drop's "forget a bad keyframe the moment it's evicted" behavior had
+been accidentally masking this for two milestones; marginalization's
+whole point is to *retain* information, so it stopped masking it. Fixed
+at the source (`VioPipeline` now filters implausible PnP poses exactly
+like `VoPipeline` does) plus a second guard at the marginalization
+boundary itself (defense in depth). Real checkpoint: marginalization's
+own net effect on MH_01 is now within noise of a from-scratch (non-
+marginalized) baseline under the same fix (0.169m/104 keyframes vs.
+0.164m/109) — holding steady as `plan/STAGE2.md`'s M1 requires, though
+this short clip doesn't show marginalization's "biggest accuracy lever"
+framing dramatically (a longer or more information-starved run is where
+that should show up, a good follow-up not required for this checkpoint).
 
 ## Building
 

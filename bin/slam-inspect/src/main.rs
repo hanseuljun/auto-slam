@@ -422,7 +422,7 @@ fn print_stereo_inertial_vio(seq: &slam_dataset::EuRocSequence, groundtruth: Opt
     match groundtruth {
         Some(gt) => match ate_of(gt, &trajectory) {
             Some(stats) => println!(
-                ", ATE (Sim3-aligned, stereo+IMU, naive fixed-lag window) over {} keyframes: rmse={:.3}m mean={:.3}m median={:.3}m max={:.3}m",
+                ", ATE (Sim3-aligned, stereo+IMU, marginalized sliding window) over {} keyframes: rmse={:.3}m mean={:.3}m median={:.3}m max={:.3}m",
                 stats.num_points, stats.rmse, stats.mean, stats.median, stats.max
             ),
             None => println!(", not enough groundtruth-covered keyframes to compute ATE"),
