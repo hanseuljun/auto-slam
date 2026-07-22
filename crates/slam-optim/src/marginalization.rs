@@ -97,10 +97,14 @@ pub fn marginalize_keyframe(input: &MarginalizationInput) -> Option<PriorFactor>
         add_block(&mut h, STATE_DIM, 0, &(wjj.transpose() * wji));
 
         let (rb, jac_bi, jac_bj) = bias_random_walk_residual_jacobian(&input.state_k, &input.state_k1);
-        let wb = input.config.bias_rw_weight.sqrt();
-        let wrb = rb * wb;
-        let wjbi = jac_bi * wb;
-        let wjbj = jac_bj * wb;
+        let mut sqrt_wb = SVector::<f64, 6>::zeros();
+        for k in 0..3 {
+            sqrt_wb[k] = input.config.bias_gyro_rw_weight.sqrt();
+            sqrt_wb[3 + k] = input.config.bias_accel_rw_weight.sqrt();
+        }
+        let wrb = rb.component_mul(&sqrt_wb);
+        let wjbi = SMatrix::<f64, 6, STATE_DIM>::from_fn(|r, c| jac_bi[(r, c)] * sqrt_wb[r]);
+        let wjbj = SMatrix::<f64, 6, STATE_DIM>::from_fn(|r, c| jac_bj[(r, c)] * sqrt_wb[r]);
         add_block(&mut h, 0, 0, &(wjbi.transpose() * wjbi));
         add_rows(&mut b, 0, &(-(wjbi.transpose() * wrb)));
         add_block(&mut h, STATE_DIM, STATE_DIM, &(wjbj.transpose() * wjbj));

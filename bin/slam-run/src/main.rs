@@ -136,6 +136,10 @@ fn run_sequence(seq_dir: &Path, out_dir: &Path, full: bool, frame_cap: usize) ->
 
     let left0 = seq.load_cam0_image(0)?;
     let right0 = seq.load_cam1_image(0)?;
+    // Not `solver_config_from_sensor_noise`: tried, measured on real data,
+    // reverted — see `decisions/0016`. The tuned ad hoc weights
+    // (`SolverConfig::default`) outperform the sensor.yaml-derived ones
+    // on 4 of 5 real sequences, even in the narrowest form tried.
     let params = slam_backend::VioParams {
         solver: slam_optim::SolverConfig { max_iterations: 6, ..slam_optim::SolverConfig::default() },
         ..slam_backend::VioParams::default()

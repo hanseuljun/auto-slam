@@ -16,5 +16,5 @@ pub use huber::huber_weight;
 pub use imu_factor::{imu_residual, imu_residual_jacobian};
 pub use marginalization::{marginalize_keyframe, MarginalizationInput, UniqueLandmarkObservation};
 pub use reprojection::reprojection_residual_jacobian;
-pub use solver::{optimize, BiasRwFactorSpec, ImuFactorSpec, PriorFactor, Problem, ReprojectionObservation, SolverConfig};
+pub use solver::{optimize, solver_config_from_sensor_noise, BiasRwFactorSpec, ImuFactorSpec, PriorFactor, Problem, ReprojectionObservation, SolverConfig};
 pub use state::{KeyframeState, STATE_DIM};

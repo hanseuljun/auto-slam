@@ -143,12 +143,24 @@ above: `MH_02_easy` and `MH_03_medium` weren't producing any numbers at
 all. Measuring (not guessing) the actual best-achievable stationary
 window per sequence found both were genuinely stationary but just barely
 past the bootstrap threshold (0.093/0.090 rad/s against a 0.09 cutoff,
-`decisions/0015`); loosening it to 0.10 fixed both with real, plausible
-numbers (MH_02 ATE 0.184m, MH_03 0.511m, both well under the real-time
-bar). `docs/RESULTS.md` now has all five `MH_*` sequences for the first
-time this session. Remaining M6 scope: real `sensor.yaml`-derived noise
-weighting (`decisions/0006`), outlier-gating tuning, keyframe/window
-sizing.
+`decisions/0015`); loosening it to 0.10 fixed both. `docs/RESULTS.md`
+now has all five `MH_*` sequences for the first time this session.
+
+M6 also tried its other headline item — real `sensor.yaml`-derived noise
+weighting, replacing the ad hoc `SolverConfig` weights `decisions/0006`
+flagged — and this one didn't pan out: built and measured on real data
+at two scopes (full derivation, then a narrower one keeping the
+hardest-to-get-right IMU pose/velocity weights at their tuned values),
+both regressed ATE on most sequences (the narrower version still
+regressed 4 of 5). The simplified formula ignores bias-*uncertainty*'s
+contribution to preintegration error — only full nonlinear covariance
+propagation would capture that, the same class of harder, deferred work
+as Stage 2's M2. Reverted; `decisions/0016` has the full writeup,
+including why this is a genuinely useful negative result, not a wasted
+attempt. Current real numbers, all real-time factors comfortably under
+1.0: MH_01 0.151m, MH_02 0.184m, MH_03 0.511m, MH_04 1.174m, MH_05
+0.455m — see `docs/RESULTS.md`. Remaining M6 scope: outlier-gating
+threshold tuning, keyframe/window sizing.
 
 ## Building
 

@@ -4,6 +4,7 @@ One line per entry, newest first within each section. See `README.md` for
 what goes where.
 
 ## progress/
+- [2026-07-22-stage2-m6-noise-weighting-tried-reverted.md](progress/2026-07-22-stage2-m6-noise-weighting-tried-reverted.md) — Stage 2 M6: sensor.yaml-derived noise weighting built, measured on real data at two scopes, both regressed accuracy on most sequences, reverted (decisions/0016). Current numbers: MH_01 0.151m, MH_02 0.184m, MH_03 0.511m, MH_04 1.174m, MH_05 0.455m, all RT factors <0.6.
 - [2026-07-21-stage2-m6-mh0203-bootstrap-fix.md](progress/2026-07-21-stage2-m6-mh0203-bootstrap-fix.md) — Stage 2 M6 (in progress): MH_02/MH_03 now run (were skipped entirely) after loosening the stationary-window threshold from a measured, not guessed, per-sequence gyro-norm analysis (decisions/0015).
 - [2026-07-21-stage2-m5-real-time-bar-met.md](progress/2026-07-21-stage2-m5-real-time-bar-met.md) — Stage 2 M5 done: real-time factor <=1.0 met on every runnable sequence via M1 alone (MH_01 0.543, MH_04 0.398, MH_05 0.523) — M2-M4 re-scoped from required to deferred in plan/STAGE2.md as a result.
 - [2026-07-21-stage2-m1-marginalization.md](progress/2026-07-21-stage2-m1-marginalization.md) — Stage 2 M1 done: real Schur-complement keyframe marginalization (closes decisions/0007). Found and fixed three real bugs, including a latent VioPipeline vulnerability decisions/0009 had explicitly predicted.
@@ -21,6 +22,7 @@ what goes where.
 - [2026-07-20-stage1-plan.md](progress/2026-07-20-stage1-plan.md) — wrote `plan/STAGE1.md`, set up CLAUDE.md + this memory directory; no pipeline code yet.
 
 ## decisions/
+- [0016-sensor-yaml-derived-imu-weights-reverted.md](decisions/0016-sensor-yaml-derived-imu-weights-reverted.md) — solver_config_from_sensor_noise exists and is tested but isn't wired into the default pipeline: measured on real data at two scopes, both regressed accuracy on 4-5 of 5 sequences, since the simplified formula ignores bias-uncertainty coupling that only full covariance propagation would capture.
 - [0015-stationary-window-threshold-loosened-to-0.10.md](decisions/0015-stationary-window-threshold-loosened-to-0.10.md) — find_stationary_window's max_gyro_norm moved 0.09->0.10: MH_02/MH_03's best achievable window was measured at 0.093/0.090, just barely over the old threshold, causing them to skip entirely despite genuinely being stationary.
 - [0014-vio-pipeline-gets-the-pose-jump-guard-decisions-0009-predicted.md](decisions/0014-vio-pipeline-gets-the-pose-jump-guard-decisions-0009-predicted.md) — VioPipeline now rejects implausible PnP pose jumps too (same fix as VoPipeline's decisions/0009), closing a gap that decision explicitly predicted — the real root cause behind M1's marginalization divergence.
 - [0013-marginalization-guards-against-implausible-pose-jumps.md](decisions/0013-marginalization-guards-against-implausible-pose-jumps.md) — marginalization rejects an implausible keyframe-to-keyframe pose jump or non-finite prior result instead of folding it in — naive-drop used to just forget a bad pose, marginalization would otherwise lock it in and diverge.

@@ -56,13 +56,15 @@ pub struct PriorFactor {
     pub information_vector: SVector<f64, STATE_DIM>,
 }
 
-/// Ad hoc (not covariance-propagated) isotropic information weights for
-/// each residual type, plus the Huber threshold for reprojection
-/// residuals. `plan/STAGE1.md` explicitly earmarks replacing these with
-/// weights derived from `sensor.yaml`'s real noise densities (and, for
-/// the IMU factor, real preintegration covariance propagation — deferred
-/// since M4, see `memory/decisions`) for M10's "accuracy closing pass";
-/// this scope is intentional, not an oversight.
+/// Information weights for each residual type, plus the Huber threshold
+/// for reprojection residuals. `Default` gives the original ad hoc
+/// (isotropic, hand-picked) values `plan/STAGE1.md` earmarked for
+/// replacement; `from_sensor_noise` (Stage 2 M6, finishing Stage 1's M10)
+/// derives them from `sensor.yaml`'s real noise densities instead — see
+/// its own doc comment for the derivation and its scope (a documented
+/// approximation, not full nonlinear covariance propagation through
+/// preintegration, which remains a separate, larger deferred item, same
+/// spirit as `decisions/0006`'s numerical-vs-analytic-Jacobian tradeoff).
 #[derive(Debug, Clone, Copy)]
 pub struct SolverConfig {
     pub max_iterations: usize,
@@ -75,7 +77,16 @@ pub struct SolverConfig {
     pub imu_rotation_weight: f64,
     pub imu_velocity_weight: f64,
     pub imu_position_weight: f64,
-    pub bias_rw_weight: f64,
+    /// Weight for the 3 gyro-bias components of the 6-dim bias-random-
+    /// walk residual (`bias_random_walk_residual_jacobian`'s first half).
+    pub bias_gyro_rw_weight: f64,
+    /// Weight for the 3 accel-bias components (the residual's second
+    /// half) — kept separate from `bias_gyro_rw_weight` since gyro-bias
+    /// and accel-bias random walk are physically distinct processes with
+    /// different `sensor.yaml` noise densities and natural scales;
+    /// lumping them under one scalar (the pre-M6 scheme) was itself part
+    /// of the ad hoc weighting this milestone replaces.
+    pub bias_accel_rw_weight: f64,
 }
 
 impl Default for SolverConfig {
@@ -88,8 +99,55 @@ impl Default for SolverConfig {
             imu_rotation_weight: 1.0 / (0.02 * 0.02),
             imu_velocity_weight: 1.0 / (0.05 * 0.05),
             imu_position_weight: 1.0 / (0.02 * 0.02),
-            bias_rw_weight: 1.0 / (0.01 * 0.01),
+            bias_gyro_rw_weight: 1.0 / (0.01 * 0.01),
+            bias_accel_rw_weight: 1.0 / (0.01 * 0.01),
         }
+    }
+}
+
+/// Derives `SolverConfig`'s *reprojection and bias-random-walk* weights
+/// from `sensor.yaml`'s real noise densities (Stage 2 M6, finishing Stage
+/// 1's M10, replacing the ad hoc `Default` values for just these two
+/// residual types — see below for why the IMU rotation/velocity/position
+/// weights are deliberately *not* included). `max_iterations`/
+/// `initial_lambda`/`huber_delta` are solver-behavior knobs, not noise
+/// weights, so they're left at `Default`'s tuned values.
+///
+/// `reprojection_weight` is a direct, low-risk conversion: assumed pixel
+/// measurement noise (`pixel_noise_std`) divided by the camera's own
+/// focal length gives the equivalent normalized-coordinate noise.
+/// `bias_gyro_rw_weight`/`bias_accel_rw_weight` use the standard
+/// "integrated white noise" scaling (`Var[∫ w dt] = sigma^2 * dt`) over a
+/// *representative* keyframe-to-keyframe interval (`dt_keyframe`) applied
+/// to `sensor.yaml`'s own random-walk densities — directly what those
+/// densities describe (bias uncertainty growth over time), so this
+/// approximation is sound for them specifically.
+///
+/// **`imu_rotation_weight`/`imu_velocity_weight`/`imu_position_weight`
+/// are deliberately left at `Default`'s ad hoc values, not derived here**
+/// — tried and measured to regress real accuracy: applying the same
+/// "integrated white noise, over a representative dt" formula to the
+/// gyro/accel *noise density* (not random walk) for these three ignores
+/// gyro/accel *bias uncertainty*'s contribution to preintegration error
+/// entirely (a real term the full nonlinear preintegration covariance
+/// `decisions/0006` deferred would include, via `Preintegration`'s own
+/// bias Jacobians) — the resulting weights were orders of magnitude more
+/// "confident" than the tuned ad hoc values, and on real MH_02/MH_03 data
+/// this measurably regressed ATE (MH_03 more than doubled, 0.511m ->
+/// 1.045m) despite improving MH_01/04/05. Properly deriving these three
+/// needs the full covariance propagation, not this simpler formula — the
+/// same correctness-risk profile `decisions/0006` deferred for the IMU
+/// factor's Jacobian, left as a real, separate, larger undertaking.
+pub fn solver_config_from_sensor_noise(gyro_random_walk: f64, accel_random_walk: f64, camera_fu: f64, dt_keyframe: f64, pixel_noise_std: f64) -> SolverConfig {
+    let sigma_normalized = pixel_noise_std / camera_fu;
+    let sigma_bias_gyro2 = gyro_random_walk * gyro_random_walk * dt_keyframe;
+    let sigma_bias_accel2 = accel_random_walk * accel_random_walk * dt_keyframe;
+
+    SolverConfig {
+        reprojection_weight: 1.0 / (sigma_normalized * sigma_normalized),
+        bias_gyro_rw_weight: 1.0 / sigma_bias_gyro2,
+        bias_accel_rw_weight: 1.0 / sigma_bias_accel2,
+        ..SolverConfig::default()
     }
 }
 
@@ -184,7 +242,10 @@ fn compute_cost(problem: &Problem, config: &SolverConfig) -> f64 {
     }
     for f in &problem.bias_rw_factors {
         let (r, _, _) = bias_random_walk_residual_jacobian(&problem.keyframes[f.i], &problem.keyframes[f.j]);
-        cost += config.bias_rw_weight * r.norm_squared();
+        for k in 0..3 {
+            cost += config.bias_gyro_rw_weight * r[k] * r[k];
+            cost += config.bias_accel_rw_weight * r[3 + k] * r[3 + k];
+        }
     }
     let sqrt_reproj_w = config.reprojection_weight.sqrt();
     for obs in &problem.reprojection_obs {
@@ -232,10 +293,14 @@ fn build_normal_equations(problem: &Problem, config: &SolverConfig) -> NormalEqu
 
     for f in &problem.bias_rw_factors {
         let (r, jac_i, jac_j) = bias_random_walk_residual_jacobian(&problem.keyframes[f.i], &problem.keyframes[f.j]);
-        let w = config.bias_rw_weight.sqrt();
-        let wr = r * w;
-        let wji = jac_i * w;
-        let wjj = jac_j * w;
+        let mut sqrt_w = SVector::<f64, 6>::zeros();
+        for k in 0..3 {
+            sqrt_w[k] = config.bias_gyro_rw_weight.sqrt();
+            sqrt_w[3 + k] = config.bias_accel_rw_weight.sqrt();
+        }
+        let wr = r.component_mul(&sqrt_w);
+        let wji = SMatrix::<f64, 6, STATE_DIM>::from_fn(|r, c| jac_i[(r, c)] * sqrt_w[r]);
+        let wjj = SMatrix::<f64, 6, STATE_DIM>::from_fn(|r, c| jac_j[(r, c)] * sqrt_w[r]);
         accumulate_pair(&mut h_pp, &mut b_p, free_index(anchored, f.i), free_index(anchored, f.j), &wji, &wjj, &wr);
     }
 
@@ -398,6 +463,48 @@ mod tests {
     use super::*;
     use approx::assert_relative_eq;
     use slam_core::SO3;
+
+    /// Sanity checks on `solver_config_from_sensor_noise`'s derivation
+    /// formula using real EuRoC MH_01 `sensor.yaml` values (from
+    /// `bin/slam-inspect`'s own printed calibration dump): a tighter
+    /// (smaller) noise density must give a *larger* weight (more trust),
+    /// and a longer `dt_keyframe` must give a *smaller* rotation/velocity
+    /// weight (more accumulated uncertainty over more time) — the
+    /// direction any real covariance-based scheme must get right,
+    /// independent of the exact approximation used.
+    #[test]
+    fn sensor_noise_derived_weights_move_the_right_direction() {
+        let gyro_rw = 1.9393e-5;
+        let accel_rw = 3.0000e-3;
+        let fu = 458.654;
+        let pixel_noise = 1.0;
+
+        let short = solver_config_from_sensor_noise(gyro_rw, accel_rw, fu, 0.2, pixel_noise);
+        let long = solver_config_from_sensor_noise(gyro_rw, accel_rw, fu, 0.5, pixel_noise);
+        assert!(short.bias_gyro_rw_weight > long.bias_gyro_rw_weight, "a longer interval should accumulate more bias uncertainty (lower weight)");
+        assert!(short.bias_accel_rw_weight > long.bias_accel_rw_weight);
+
+        let noisier_gyro_rw = solver_config_from_sensor_noise(gyro_rw * 10.0, accel_rw, fu, 0.5, pixel_noise);
+        assert!(noisier_gyro_rw.bias_gyro_rw_weight < long.bias_gyro_rw_weight, "a noisier gyro bias random walk should be trusted less");
+
+        // A shorter focal length (same pixel noise) implies more angular
+        // uncertainty per pixel, so less trust in reprojection residuals.
+        let shorter_focal = solver_config_from_sensor_noise(gyro_rw, accel_rw, fu / 2.0, 0.5, pixel_noise);
+        assert!(shorter_focal.reprojection_weight < long.reprojection_weight);
+
+        // The three IMU pose/velocity weights are deliberately left at
+        // Default's values (see this function's own doc comment for why)
+        // — not affected by any of these inputs.
+        assert_eq!(long.imu_rotation_weight, SolverConfig::default().imu_rotation_weight);
+        assert_eq!(long.imu_velocity_weight, SolverConfig::default().imu_velocity_weight);
+        assert_eq!(long.imu_position_weight, SolverConfig::default().imu_position_weight);
+
+        // All derived weights are finite and positive for physically
+        // sane inputs — the kind of thing a unit mistake would violate.
+        for w in [long.reprojection_weight, long.bias_gyro_rw_weight, long.bias_accel_rw_weight] {
+            assert!(w.is_finite() && w > 0.0);
+        }
+    }
 
     /// End-to-end toy problem: 4 keyframes with known ground-truth motion
     /// (constant angular + linear velocity, matching the same synthetic

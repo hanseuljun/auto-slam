@@ -45,16 +45,27 @@ MH_02_easy and MH_03_medium now run — they were skipped entirely before,
 not because they lack a stationary window (both do, matching `plan/
 STAGE1.md`'s own dataset notes) but because the bootstrap threshold was
 measurably too tight for them specifically — see `decisions/0015` for
-the measured per-sequence numbers.
+the measured per-sequence numbers. Loosening it also shifted *which*
+stationary window MH_01_easy itself uses (an earlier-but-still-valid one
+now qualifies too), which is why MH_01's own number moved slightly even
+though nothing about MH_01's pipeline changed — every number below is
+freshly re-measured at the same current code state, not assembled from
+runs at different points in time.
+
+Stage 2 M6 also tried deriving `SolverConfig`'s noise weights from
+`sensor.yaml`'s real densities instead of the ad hoc `Default` values —
+measured on real data at two scopes, both regressed accuracy on most
+sequences, reverted (`decisions/0016`). The numbers below use the
+original ad hoc weights.
 
 ## ATE RMSE (meters), bounded 600-frame (~30s) clips, no loop closure
 
 | Sequence | This repo (M5+M8+M1, ~30s clip) | ORB-SLAM3 (full seq.) | OKVIS (full seq.) | VINS-Fusion (full seq.) | Kimera (full seq.) |
 |---|---|---|---|---|---|
-| MH_01_easy | 0.169 | 0.036 | 0.079 | 0.166 | 0.080 |
+| MH_01_easy | 0.151 | 0.036 | 0.079 | 0.166 | 0.080 |
 | MH_02_easy | 0.184 | 0.033 | 0.044 | 0.152 | 0.090 |
 | MH_03_medium | 0.511 | 0.035 | 0.096 | 0.125 | 0.110 |
-| MH_04_difficult | 1.191 | 0.051 | 0.197 | 0.280 | 0.150 |
+| MH_04_difficult | 1.174 | 0.051 | 0.197 | 0.280 | 0.150 |
 | MH_05_difficult | 0.455 | 0.082 | 0.206 | 0.284 | 0.240 |
 
 Published numbers are stereo-inertial ATE RMSE as reported in:
@@ -76,11 +87,11 @@ spare:
 
 | Sequence | vision (s) | optimization (s) | VIO loop factor | global BA (s, separate) |
 |---|---|---|---|---|
-| MH_01_easy | 13.5 | 2.8 | **0.543** | 2.6 |
-| MH_02_easy | 13.7 | 2.6 | **0.541** | 2.6 |
-| MH_03_medium | 15.5 | 2.9 | **0.615** | 2.3 |
-| MH_04_difficult | 10.4 | 1.5 | **0.398** | 1.6 |
-| MH_05_difficult | 13.1 | 2.5 | **0.523** | 2.0 |
+| MH_01_easy | 14.8 | 2.8 | **0.589** | 2.7 |
+| MH_02_easy | 13.6 | 2.6 | **0.540** | 2.6 |
+| MH_03_medium | 14.6 | 2.8 | **0.578** | 2.1 |
+| MH_04_difficult | 10.9 | 1.5 | **0.412** | 1.8 |
+| MH_05_difficult | 13.1 | 2.4 | **0.518** | 2.1 |
 
 "VIO loop factor" = `(vision + optimization) / data_seconds`, the number
 `plan/STAGE2.md`'s real-time bar applies to (global BA is a separate,
@@ -111,8 +122,11 @@ real-time goal — see `plan/STAGE2.md` for the resulting re-scoping.
   loop closure taking full-sequence ATE from ~5.6m to ~3.3m, a different
   pipeline configuration than this table).
 - **Noise weighting is still ad hoc**, not derived from `sensor.yaml`'s
-  real covariances (`memory/decisions/0006`) — `plan/STAGE2.md`'s M6,
-  not a sign this harness is broken.
+  real covariances (`memory/decisions/0006`) — tried in Stage 2 M6
+  (`decisions/0016`), measurably regressed real data, reverted. Properly
+  fixing this needs full nonlinear preintegration covariance propagation,
+  not a simpler per-residual-type formula — a real, larger, separate
+  undertaking, not a sign this harness is broken.
 - Published numbers are quoted from each system's own paper, evaluated by
   its own authors — treated here as directional reference points ("same
   ballpark"), matching `plan/STAGE1.md`'s own framing, not a strict

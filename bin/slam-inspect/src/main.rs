@@ -371,6 +371,10 @@ fn print_stereo_inertial_vio(seq: &slam_dataset::EuRocSequence, groundtruth: Opt
 
     let left0 = seq.load_cam0_image(0).expect("decode frame 0");
     let right0 = seq.load_cam1_image(0).expect("decode frame 0");
+    // Not `solver_config_from_sensor_noise`: tried, measured on real data,
+    // reverted — see `decisions/0016`. The tuned ad hoc weights
+    // (`SolverConfig::default`) outperform the sensor.yaml-derived ones
+    // on 4 of 5 real sequences, even in the narrowest form tried.
     let params = slam_backend::VioParams {
         solver: slam_optim::SolverConfig { max_iterations: 6, ..slam_optim::SolverConfig::default() },
         ..slam_backend::VioParams::default()

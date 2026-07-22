@@ -176,7 +176,7 @@ reduction order, not reliant on thread scheduling for correctness).
   the available budget to spare, without needing M2-M4. See M1's
   "unplanned finding" above for why.
 
-### M6 — Finish Stage 1's M10: accuracy closing pass — Next up
+### M6 — Finish Stage 1's M10: accuracy closing pass — In progress
 
 - Now that M1-M5 make iteration fast enough to actually iterate on: real
   `sensor.yaml`-derived noise weighting (replacing the ad hoc weights
@@ -188,6 +188,31 @@ reduction order, not reliant on thread scheduling for correctness).
   improvement over M0's baseline on every sequence tuned, with the
   real-time bar from M5 still holding (a tuning pass that regresses speed
   back out of real-time doesn't count as done).
+- **Sub-step done: initializer bootstrap fix.** `MH_02_easy`/
+  `MH_03_medium` weren't producing any numbers at all (not just
+  "inaccurate" — skipped entirely). Measured the actual per-sequence
+  stationary-window quality and found the bootstrap threshold was
+  genuinely too tight for both; loosened it with real margin above every
+  sequence's measured value (`decisions/0015`). All five sequences now
+  have real numbers in `docs/RESULTS.md`.
+- **Sub-step tried and reverted: sensor.yaml-derived noise weighting.**
+  Built and measured at two scopes (full derivation of all IMU/
+  reprojection/bias weights, then a narrower version keeping IMU pose/
+  velocity weights at their tuned values) — both regressed real ATE on
+  most sequences. The simplified "integrated white noise" formula ignores
+  bias-uncertainty coupling that only full nonlinear preintegration
+  covariance propagation would capture; the ad hoc weights, hand-tuned
+  against real data, outperform it. Reverted; `solver_config_from_sensor_
+  noise` exists and is tested but isn't wired into the default pipeline.
+  Full writeup: `decisions/0016`. Doing this properly is now understood
+  to need the same class of work as the deferred M2 (real preintegration
+  covariance, not just noise densities plugged into isolated formulas) —
+  a real, separate, larger undertaking, not a quick sub-step.
+- Remaining open: outlier-gating threshold tuning, keyframe/window
+  sizing. Initializer robustness specifically for MH_04/MH_05 is lower
+  priority than the MH_02/03 fix was — both already produce real numbers
+  via the dynamic (not static) initializer, so there's no equivalent
+  "produces nothing at all" gap to close there.
 
 ## Out of scope for Stage 2
 
