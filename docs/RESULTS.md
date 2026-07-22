@@ -27,22 +27,28 @@ data per sequence) — not `--full`. An earlier attempt at this exact
 milestone ran the un-truncated pipeline over one full sequence and took
 30+ minutes wall-clock before being rolled back; see
 `memory/decisions/0011` for the determinism bug found and fixed since
-then, and `plan/STAGE2.md`'s "What we already know" for the O(n^3)
-global-BA scaling issue that made that run so slow — both are still
-partly true (global BA is not yet marginalized/sparse, Stage 2's M1-M3),
-so a full run remains slow until those land. All numbers below are
-reproducible bit-for-bit run to run (`decisions/0011`'s fix), unlike an
-earlier version of this table would have been.
+then. Global BA's O(n^3) scaling (`plan/STAGE2.md`'s original "What we
+already know") is now bounded by Stage 2 M1's real marginalization — a
+full run should be far more practical since, though not re-benchmarked
+with `--full` yet. All numbers below are reproducible bit-for-bit run to
+run (`decisions/0011`'s fix).
+
+**Updated after Stage 2 M1** (real marginalization, `decisions/0007`,
+plus two real bugs it surfaced and fixed — `decisions/0012`-`0014`,
+notably `VioPipeline` finally getting the PnP pose-jump guard
+`decisions/0009` gave `VoPipeline` back in M7). MH_05 in particular
+improved substantially (1.501m -> 0.455m) — that sequence was hitting
+exactly the corruption `decisions/0014` fixed.
 
 ## ATE RMSE (meters), bounded 600-frame (~30s) clips, no loop closure
 
-| Sequence | This repo (M5+M8, ~30s clip) | ORB-SLAM3 (full seq.) | OKVIS (full seq.) | VINS-Fusion (full seq.) | Kimera (full seq.) |
+| Sequence | This repo (M5+M8+M1, ~30s clip) | ORB-SLAM3 (full seq.) | OKVIS (full seq.) | VINS-Fusion (full seq.) | Kimera (full seq.) |
 |---|---|---|---|---|---|
-| MH_01_easy | 0.137 | 0.036 | 0.079 | 0.166 | 0.080 |
+| MH_01_easy | 0.169 | 0.036 | 0.079 | 0.166 | 0.080 |
 | MH_02_easy | not run — no stationary window found for IMU bootstrap (see "Known gaps") | 0.033 | 0.044 | 0.152 | 0.090 |
 | MH_03_medium | not run — same reason | 0.035 | 0.096 | 0.125 | 0.110 |
-| MH_04_difficult | 1.481 | 0.051 | 0.197 | 0.280 | 0.150 |
-| MH_05_difficult | 1.501 | 0.082 | 0.206 | 0.284 | 0.240 |
+| MH_04_difficult | 1.191 | 0.051 | 0.197 | 0.280 | 0.150 |
+| MH_05_difficult | 0.455 | 0.082 | 0.206 | 0.284 | 0.240 |
 
 Published numbers are stereo-inertial ATE RMSE as reported in:
 
@@ -57,28 +63,31 @@ Published numbers are stereo-inertial ATE RMSE as reported in:
 
 ## Real-time factor (wall-clock seconds spent / seconds of data processed)
 
+**Stage 2's M5 real-time bar (factor <= 1.0) is met on every runnable
+sequence, as of M1** — comfortably, with roughly half the budget to
+spare:
+
 | Sequence | vision (s) | optimization (s) | VIO loop factor | global BA (s, separate) |
 |---|---|---|---|---|
-| MH_01_easy | 31.5 | 4.4 | **1.198** | 46.3 |
-| MH_04_difficult | 9.7 | 1.0 | **0.357** | 0.7 |
-| MH_05_difficult | 27.5 | 5.0 | **1.086** | 42.1 |
+| MH_01_easy | 13.5 | 2.8 | **0.543** | 2.6 |
+| MH_04_difficult | 10.4 | 1.5 | **0.398** | 1.6 |
+| MH_05_difficult | 13.1 | 2.5 | **0.523** | 2.0 |
 
 "VIO loop factor" = `(vision + optimization) / data_seconds`, the number
 `plan/STAGE2.md`'s real-time bar applies to (global BA is a separate,
 one-shot batch pass, not held to the same per-frame bar — see the plan's
-M5 scope note). **Two of three runnable sequences are already at or near
-the 1.0 bar** (1.20 and 1.09) even before any of Stage 2's planned
-speedups (marginalization, analytic IMU Jacobians, sparse solve, `rayon`
-parallelism) — MH_04's lower factor (0.357) despite fewer landmarks
-suggests the dominant cost is track-loss-recovery frequency (MH_01/05
-both produced far more keyframes than the nominal stride-10 rate implies,
-meaning many frames triggered M6's recovery path), not raw per-frame
-vision cost. Global BA, in contrast, is wildly disproportionate — 42-46
-seconds for ~250-260 keyframes on a 30-second clip — a direct, measured
-confirmation of `plan/STAGE2.md`'s "What we already know" (dense O(n^3)
-solve, unbounded by marginalization) and the concrete reason Stage 2
-sequences M1 (marginalization) before claiming victory on the real-time
-goal.
+M5 scope note). Before Stage 2 M1 (marginalization + the PnP pose-jump
+fixes, `decisions/0012`-`0014`), these factors were 1.198 / 0.357 / 1.086
+and global BA took 42-46 seconds — M1 fixed a real accuracy bug, and as a
+direct side effect also fixed real-time performance: the old numbers'
+inflated keyframe counts (up to 438 vs. today's ~100) came from cascading
+track-loss recoveries triggered by the same PnP corruption `decisions/
+0014` fixed, and each spurious recovery keyframe cost a full round of
+stereo matching/landmark detection — fixing the *cause* of those
+recoveries removed most of the *cost*, not just the accuracy problem.
+Because of this, Stage 2's M2 (analytic IMU Jacobians), M3 (sparse
+solve), and M4 (`rayon` parallelism) are no longer required to hit the
+real-time goal — see `plan/STAGE2.md` for the resulting re-scoping.
 
 ## Known gaps (honest, not swept under the rug)
 

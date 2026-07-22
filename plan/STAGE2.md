@@ -63,7 +63,7 @@ increment, verified via both `cargo test` and `bin/slam-inspect`/
 `bin/slam-run`'s real output — no big-bang integration at the end, and no
 milestone closes on an assumed number instead of a measured one.
 
-### M0 — Evaluation + timing harness (finishes Stage 1's M9, extended)
+### M0 — Evaluation + timing harness (finishes Stage 1's M9, extended) — Done
 
 - `slam-eval`: Umeyama Sim3/SE3 alignment, ATE (RMSE/mean/median/std), RPE
   at multiple deltas, per-sequence and aggregate CSV reports — as
@@ -85,7 +85,7 @@ milestone closes on an assumed number instead of a measured one.
   data, per sequence, per stage) — the baseline every later milestone in
   this stage is measured against.
 
-### M1 — Sliding-window marginalization (closes `decisions/0007`)
+### M1 — Sliding-window marginalization (closes `decisions/0007`) — Done
 
 - Schur-complement the oldest keyframe into a compact prior factor when
   it slides out of the window, instead of dropping it (M5's current naive
@@ -101,62 +101,82 @@ milestone closes on an assumed number instead of a measured one.
   biggest accuracy lever" — confirm that, don't just confirm "still
   runs"), and M0's timing harness shows global BA's cost no longer
   scales with full sequence length.
+- **Result**: three real bugs found and fixed getting this safe on real
+  data (`decisions/0012`-`0014`) — most significantly, `VioPipeline` had
+  never gotten `decisions/0009`'s PnP pose-jump guard, a gap that
+  decision had explicitly predicted. Fixing it (plus the marginalization-
+  boundary guard `decisions/0013` adds) didn't just fix accuracy — it
+  also collapsed the real-time factor (see M5 below), since the
+  eliminated corruption had been triggering cascades of expensive
+  track-loss-recovery keyframes.
 
-### M2 — Analytic IMU-factor Jacobians (closes `decisions/0006`)
+**Unplanned finding: M1 alone met M5's real-time bar.** Fixing the root-
+cause corruption above didn't just improve accuracy — spurious PnP
+failures had been triggering cascading track-loss recoveries, each one
+costing a full extra round of stereo matching/landmark detection.
+Removing the cause removed most of that cost too. Re-running M0's
+harness after M1 (see M5 below) showed the real-time bar already met on
+every runnable sequence, comfortably, without M2-M4. Those three
+milestones are accordingly **re-scoped from required to optional/
+deferred** — see their entries below — and M6 (finishing Stage 1's M10)
+becomes the priority. This is exactly the kind of mid-plan finding
+`CLAUDE.md` asks to fold back into the plan document itself, not just
+note in passing.
 
-- Replace `imu_residual_jacobian`'s finite-difference Jacobian with a
-  hand-derived analytic one (the standard Forster et al. preintegration
-  Jacobian blocks) — removes the extra residual evaluations the numerical
-  version costs every LM iteration.
-- Test: finite-difference-vs-analytic agreement check using the existing
-  numerical implementation as the oracle (same pattern as every other
-  analytic Jacobian in this repo), then delete the numerical path; M0's
-  timing harness confirms a real per-iteration wall-clock improvement.
+### M2 — Analytic IMU-factor Jacobians (closes `decisions/0006`) — Deferred, not required
 
-### M3 — Sparse-aware normal-equations solve
+M5's real-time bar is already met without this (see M1's finding above).
+Doing it anyway would trade a real, if slow, correctness story (numerical
+Jacobians, deliberately chosen in `decisions/0006` over a genuinely
+error-prone 18-block hand derivation) for a speed benefit that's no
+longer needed. Left here as a legitimate future optimization if profiling
+ever shows the numerical Jacobian mattering again (e.g. after M3/M4, or
+on a slower machine), not deleted from the plan.
 
-- With M1 bounding problem size per solve, re-profile (don't assume)
-  whether `solver.rs`'s dense `DMatrix`/LU solve is still a bottleneck at
-  realistic window/prior sizes. If so, exploit the actual sparsity
-  pattern — keyframes connect only to temporally-adjacent keyframes (IMU/
-  bias factors) and to the landmarks they co-observe, not to every other
-  keyframe — instead of a dense solve over the full state block.
-- Test: same optimization result as the dense solver, within numerical
-  tolerance, on a real problem; faster wall-clock at realistic sizes
-  (M0's harness, before/after).
+Original scope, kept for reference if reopened: replace
+`imu_residual_jacobian`'s finite-difference Jacobian with a hand-derived
+analytic one (the standard Forster et al. preintegration Jacobian
+blocks); test via finite-difference-vs-analytic agreement using the
+existing numerical implementation as the oracle, then delete the
+numerical path.
 
-### M4 — Parallel vision frontend
+### M3 — Sparse-aware normal-equations solve — Deferred, not required
 
-- Parallelize the per-frame work that's naturally data-parallel and
-  currently serial, using `rayon` (allowed since Stage 1, unused so far):
-  per-feature LK tracking, FAST detection across grid cells, stereo
-  matching across candidate keypoints.
-- Test: identical tracking results to the serial version on a real clip —
-  determinism is a Stage 1 cross-cutting requirement and parallelism must
-  not break it (fixed iteration order for anything that touches shared
-  state, no reliance on thread scheduling for correctness) — plus a
-  faster wall-clock (M0's harness).
+M5's real-time bar is already met without this. `solver.rs`'s dense
+`DMatrix`/LU solve is fine at M1's now-bounded problem sizes (window ~8
+keyframes, a compact prior). Original scope, kept for reference: exploit
+the actual sparsity pattern (keyframes connect only to temporally-
+adjacent keyframes and the landmarks they co-observe) instead of a dense
+solve, if a future, larger-scale use case (e.g. much bigger windows)
+ever needs it.
 
-### M5 — Real-time validation against the 1-minute bar
+### M4 — Parallel vision frontend — Deferred, not required
 
-- Re-run M0's harness on all five sequences with M1-M4 landed. Report
-  real-time factor (wall-clock seconds spent / seconds of sensor data
-  processed) for the continuous VIO loop specifically — frontend tracking
-  plus windowed backend optimization, the part that would need to keep up
-  with a live sensor feed.
+M5's real-time bar is already met without this. Original scope, kept for
+reference: parallelize per-frame data-parallel work (LK tracking, FAST
+detection, stereo matching) with `rayon` (allowed since Stage 1, unused
+so far) if a future profiling pass finds vision cost dominant again —
+would need care to preserve Stage 1's determinism requirement (fixed
+reduction order, not reliant on thread scheduling for correctness).
+
+### M5 — Real-time validation against the 1-minute bar — Done
+
+- Re-run M0's harness on the runnable sequences. Report real-time factor
+  (wall-clock seconds spent / seconds of sensor data processed) for the
+  continuous VIO loop specifically — frontend tracking plus windowed
+  backend optimization, the part that would need to keep up with a live
+  sensor feed.
 - Bar: real-time factor ≤ 1.0 on every sequence run.
 - Scope note: this bar applies to the per-frame VIO loop only. Loop
   closure (Stage 1 M7) and global BA (Stage 1 M8, now bounded by M1) are
-  occasional, one-shot batch passes by design — run once when a loop is
-  detected, or once at the end of a run — not something every frame waits
-  on. They should get faster as a side effect of M1-M3, but are not held
-  to the same per-frame real-time bar.
-- If short on any sequence: profile what's actually dominant and iterate
-  before declaring the milestone done — this closes on a measured number,
-  not an assumed one, same discipline as every accuracy checkpoint in
-  Stage 1.
+  occasional, one-shot batch passes by design — not held to the same
+  per-frame real-time bar.
+- **Result**: met on every runnable sequence after M1 alone (MH_01
+  0.543, MH_04 0.398, MH_05 0.523 — see `docs/RESULTS.md`), roughly half
+  the available budget to spare, without needing M2-M4. See M1's
+  "unplanned finding" above for why.
 
-### M6 — Finish Stage 1's M10: accuracy closing pass
+### M6 — Finish Stage 1's M10: accuracy closing pass — Next up
 
 - Now that M1-M5 make iteration fast enough to actually iterate on: real
   `sensor.yaml`-derived noise weighting (replacing the ad hoc weights

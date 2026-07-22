@@ -4,6 +4,7 @@ One line per entry, newest first within each section. See `README.md` for
 what goes where.
 
 ## progress/
+- [2026-07-21-stage2-m5-real-time-bar-met.md](progress/2026-07-21-stage2-m5-real-time-bar-met.md) — Stage 2 M5 done: real-time factor <=1.0 met on every runnable sequence via M1 alone (MH_01 0.543, MH_04 0.398, MH_05 0.523) — M2-M4 re-scoped from required to deferred in plan/STAGE2.md as a result.
 - [2026-07-21-stage2-m1-marginalization.md](progress/2026-07-21-stage2-m1-marginalization.md) — Stage 2 M1 done: real Schur-complement keyframe marginalization (closes decisions/0007). Found and fixed three real bugs, including a latent VioPipeline vulnerability decisions/0009 had explicitly predicted.
 - [2026-07-21-stage2-m0-evaluation-and-timing-harness.md](progress/2026-07-21-stage2-m0-evaluation-and-timing-harness.md) — Stage 2 M0 done: bin/slam-run + docs/RESULTS.md (accuracy + real-time factor vs. published SOTA). Found and fixed a real determinism bug (HashMap iteration order, decisions/0011) along the way.
 - [2026-07-21-stage2-plan.md](progress/2026-07-21-stage2-plan.md) — wrote `plan/STAGE2.md`: real-time VIO (factor <=1.0) + finishing Stage 1's M9/M10, after a rolled-back M9 attempt found global BA's dense O(n^3) solve doesn't scale (decisions/0007's unbounded history is the root cause).

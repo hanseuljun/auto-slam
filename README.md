@@ -12,10 +12,10 @@ It targets the EuRoC `machine_hall` stereo-inertial dataset
 (`MH_01_easy` .. `MH_05_difficult`), aiming for accuracy competitive with
 published stereo-inertial SLAM systems (ORB-SLAM3, OKVIS, VINS-Fusion,
 Kimera-VIO), and — as of Stage 2 — real-time processing (1 second of
-sensor data processed in at most 1 second of wall-clock). Current plan:
-[`plan/STAGE2.md`](plan/STAGE2.md); [`plan/STAGE1.md`](plan/STAGE1.md) is
-the original 11-milestone plan (mostly done) that Stage 2 finishes and
-builds on.
+sensor data processed in at most 1 second of wall-clock, **now met**, see
+below). Current plan: [`plan/STAGE2.md`](plan/STAGE2.md);
+[`plan/STAGE1.md`](plan/STAGE1.md) is the original 11-milestone plan
+(mostly done) that Stage 2 finishes and builds on.
 
 ## Status
 
@@ -23,11 +23,12 @@ Stage 1 milestones M0-M8 are done: stereo visual odometry, IMU
 preintegration/initialization, a sliding-window backend that jointly
 optimizes both, track-loss recovery verified across full, un-truncated
 real sequences, loop closure with a measurable, real-data accuracy win,
-and a global bundle-adjustment pass over the full trajectory. Stage 2's M0
-(evaluation + timing harness, finishing Stage 1's M9) and M1 (real
-sliding-window marginalization, closing `decisions/0007`) are also done —
-see [`docs/RESULTS.md`](docs/RESULTS.md) for real, reproducible accuracy
-and real-time-factor numbers. See [`plan/STAGE1.md`](plan/STAGE1.md) and
+and a global bundle-adjustment pass over the full trajectory. Stage 2's
+M0 (evaluation + timing harness, finishing Stage 1's M9), M1 (real
+sliding-window marginalization, closing `decisions/0007`), and M5 (the
+real-time bar itself — met via M1, ahead of schedule) are also done — see
+[`docs/RESULTS.md`](docs/RESULTS.md) for real, reproducible accuracy and
+real-time-factor numbers. See [`plan/STAGE1.md`](plan/STAGE1.md) and
 [`plan/STAGE2.md`](plan/STAGE2.md) for the full milestone lists and
 [`memory/progress/`](memory/progress/) for a session-by-session log of
 what landed and when.
@@ -45,7 +46,9 @@ what landed and when.
 | Stage 1 M8 | Global bundle adjustment over the full trajectory | Done |
 | Stage 2 M0 | Evaluation + timing harness (finishes Stage 1 M9) | Done |
 | Stage 2 M1 | Sliding-window marginalization (closes Stage 1 `decisions/0007`) | Done |
-| Stage 2 M2-M6 | Analytic Jacobians, sparse solve, `rayon` parallelism, real-time validation, accuracy tuning (finishes Stage 1 M10) | Not started |
+| Stage 2 M2-M4 | Analytic Jacobians, sparse solve, `rayon` parallelism | Deferred — not required, real-time bar already met (see M5) |
+| Stage 2 M5 | Real-time validation (factor ≤ 1.0) | **Done — met via M1 alone** |
+| Stage 2 M6 | Accuracy closing pass (finishes Stage 1 M10) | Not started |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
@@ -123,6 +126,17 @@ marginalized) baseline under the same fix (0.169m/104 keyframes vs.
 this short clip doesn't show marginalization's "biggest accuracy lever"
 framing dramatically (a longer or more information-starved run is where
 that should show up, a good follow-up not required for this checkpoint).
+
+**Stage 2's real-time goal (M5) turned out to already be met by M1
+alone.** The plan originally expected M2 (analytic IMU Jacobians), M3
+(sparse solve), and M4 (`rayon` parallelism) to be needed first — but the
+PnP corruption fixed above had been triggering cascades of expensive
+track-loss-recovery keyframes, and removing the cause removed most of
+that wasted cost too. Real-time factor dropped from 1.198/0.357/1.086
+(MH_01/04/05) to 0.543/0.398/0.523 — comfortably under the 1.0 bar on
+every runnable sequence, roughly half the budget to spare. `plan/
+STAGE2.md` now marks M2-M4 deferred rather than required, and M6
+(finishing Stage 1's M10, accuracy tuning) is next.
 
 ## Building
 
