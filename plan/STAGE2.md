@@ -208,11 +208,17 @@ reduction order, not reliant on thread scheduling for correctness).
   to need the same class of work as the deferred M2 (real preintegration
   covariance, not just noise densities plugged into isolated formulas) —
   a real, separate, larger undertaking, not a quick sub-step.
-- Remaining open: outlier-gating threshold tuning, keyframe/window
-  sizing. Initializer robustness specifically for MH_04/MH_05 is lower
-  priority than the MH_02/03 fix was — both already produce real numbers
-  via the dynamic (not static) initializer, so there's no equivalent
-  "produces nothing at all" gap to close there.
+- **Sub-step tried and reverted: larger `window_size` (8 -> 12).**
+  Unambiguous — regressed ATE on all five sequences (MH_03 doubled,
+  MH_05 nearly doubled) and raised the real-time factor on 4 of 5.
+  Reverted; `VioParams::default()`'s `window_size: 8` unchanged.
+- Remaining open: outlier-gating threshold tuning. A *smaller* window
+  might be worth trying before a larger one, if window sizing gets
+  revisited (bigger clearly isn't better at this scale with the current
+  ad hoc weights). Initializer robustness specifically for MH_04/MH_05 is
+  lower priority than the MH_02/03 fix was — both already produce real
+  numbers via the dynamic (not static) initializer, so there's no
+  equivalent "produces nothing at all" gap to close there.
 
 ## Out of scope for Stage 2
 

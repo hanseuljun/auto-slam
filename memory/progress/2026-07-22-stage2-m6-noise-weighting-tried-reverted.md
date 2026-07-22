@@ -1,11 +1,11 @@
 ---
 name: stage2-m6-noise-weighting-tried-reverted
-description: Stage 2 M6 sub-step — sensor.yaml-derived SolverConfig noise weights were built, tested, and measured against real data at two scopes; both regressed accuracy on most sequences, so reverted (decisions/0016). A genuine negative result worth recording, not a milestone completion.
+description: Stage 2 M6 sub-steps — sensor.yaml-derived SolverConfig noise weights, and separately a larger window_size, were both built/tested and measured against real data; both regressed accuracy, so both reverted (decisions/0016 for the noise-weighting story). Genuine negative results worth recording, not milestone completions.
 metadata:
   type: progress
 ---
 
-# Stage 2 M6 — noise weighting: tried, measured, reverted
+# Stage 2 M6 — noise weighting and window sizing: tried, measured, reverted
 
 Continuing `plan/STAGE2.md`'s M6 (finishing Stage 1's M10) after the
 MH_02/MH_03 bootstrap fix (`2026-07-21-stage2-m6-mh0203-bootstrap-fix.md`):
@@ -76,6 +76,20 @@ All five real-time factors comfortably under the 1.0 bar, consistent
 with M5's earlier finding. `docs/RESULTS.md` updated with these
 (replacing all five rows, not just the ones that changed, to keep the
 table measured at one consistent code state).
+
+## Also tried and reverted: `window_size` 8 -> 12
+
+Same session, same discipline: a bigger sliding window (more keyframes'
+worth of constraints per optimization) tested via `bin/slam-run` across
+all five sequences. Unambiguous result — *every* sequence got worse on
+*both* metrics: ATE regressed on all five (MH_03 doubled, 0.511m ->
+1.053m; MH_05 nearly doubled, 0.455m -> 0.840m), and the real-time factor
+also rose on 4 of 5 (MH_02 0.540 -> 0.768, MH_03 0.578 -> 0.722). No
+partial win to preserve here, unlike the noise-weighting attempt — a
+clean revert, `VioParams::default()`'s `window_size: 8` unchanged. Worth
+knowing for any future window-sizing work: bigger clearly isn't better at
+this problem's scale with the current (ad hoc) noise weights — a smaller
+window might be worth trying before a larger one, if this gets revisited.
 
 ## State at end of session / what's left in M6
 
