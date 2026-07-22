@@ -16,11 +16,12 @@ plan, scope, and accuracy target.
 
 ## Status
 
-Stage 1 milestones M0-M7 are done: stereo visual odometry, IMU
+Stage 1 milestones M0-M8 are done: stereo visual odometry, IMU
 preintegration/initialization, a sliding-window backend that jointly
 optimizes both, track-loss recovery verified across full, un-truncated
-real sequences, and loop closure with a measurable, real-data accuracy
-win. See [`plan/STAGE1.md`](plan/STAGE1.md) for the milestone list and
+real sequences, loop closure with a measurable, real-data accuracy win,
+and a global bundle-adjustment pass over the full trajectory. See
+[`plan/STAGE1.md`](plan/STAGE1.md) for the milestone list and
 [`memory/progress/`](memory/progress/) for a session-by-session log of
 what landed and when.
 
@@ -34,7 +35,8 @@ what landed and when.
 | M5 | Sliding-window VIO backend (fuses M3's VO with M4's IMU) | Done |
 | M6 | Track-loss recovery, robustness, full-sequence runs | Done |
 | M7 | Loop closure (BoW, geometric verification, pose graph) | Done |
-| M8-M10 | Global BA, evaluation harness, accuracy tuning | Not started |
+| M8 | Global bundle adjustment over the full trajectory | Done |
+| M9-M10 | Evaluation harness, accuracy tuning | Not started |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
@@ -62,7 +64,16 @@ pipeline) whenever a frame is genuinely untrackable. As of M7, MH_05
 (the sequence with a real loop — it revisits its own start position at
 the very end, after ~98m of travel) shows a real, measurable loop-closure
 win: BoW place recognition + geometric verification + pose-graph
-optimization takes full-sequence ATE from ~5.6m down to ~3.3m.
+optimization takes full-sequence ATE from ~5.6m down to ~3.3m. As of M8,
+it also reports one global bundle-adjustment pass (reusing M5's own
+solver, just over every keyframe ever created instead of the sliding
+window) with before/after ATE on the same clip: on the short, loop-free
+MH_01 clip shown by default this holds essentially flat (~0.104m ->
+~0.104m) rather than clearly improving — expected, not a bug, since a
+short window-only clip leaves little "unfinished optimization" for a
+global pass to clean up (see `memory/progress/2026-07-21-m8-...md` for
+why a longer sequence, or a post-loop-closure run, is where global BA's
+real win should show up).
 
 ## Building
 
@@ -103,7 +114,9 @@ above is real, not just claimed):
   keyframes above) always
 - stereo-inertial VIO stats (sequences with a stationary bootstrap window
   only): landmarks, keyframes, and ATE for the full sliding-window
-  backend — directly comparable to the stereo-VO-only ATE above
+  backend — directly comparable to the stereo-VO-only ATE above — plus a
+  one-shot global bundle-adjustment pass over every keyframe (M8), with
+  before/after ATE
 - loop closure (MH_05 only — the sequence with a real, documented loop):
   the detected/verified revisit and ATE with vs. without pose-graph
   optimization, run over the full sequence (takes ~40s in release, so

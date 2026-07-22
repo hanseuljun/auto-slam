@@ -331,7 +331,12 @@ fn print_imu_initialization(seq: &slam_dataset::EuRocSequence, vo_keyframes: &[s
 /// Schur-complement landmark elimination) over a real clip, reported the
 /// same way as the M3 stereo-VO-only section for direct comparison.
 fn print_stereo_inertial_vio(seq: &slam_dataset::EuRocSequence, groundtruth: Option<&slam_eval::GroundTruthTrajectory>) {
-    const NUM_FRAMES: usize = 80;
+    // Long enough that several keyframes slide past the default 8-keyframe
+    // window (decisions/0007) into retained history, so the M8 global-BA
+    // pass below actually has more than the window's own keyframes to work
+    // with (see slam-backend's global_bundle_adjustment_does_not_worsen_ate
+    // checkpoint test for the same reasoning).
+    const NUM_FRAMES: usize = 150;
     let num_frames = NUM_FRAMES.min(seq.cam0_frames.len());
     if num_frames < 2 {
         println!("stereo-inertial VIO: not enough frames to demonstrate");
@@ -402,25 +407,52 @@ fn print_stereo_inertial_vio(seq: &slam_dataset::EuRocSequence, groundtruth: Opt
         lost_at.map(|i| format!(" (lost at frame {i})")).unwrap_or_default()
     );
 
-    match groundtruth {
-        Some(gt) => {
-            let mut aligned_estimate = Vec::new();
-            let mut aligned_groundtruth = Vec::new();
-            for (t, p) in &trajectory {
-                if let Some(pose) = gt.interpolate(*t) {
-                    aligned_estimate.push(*p);
-                    aligned_groundtruth.push(pose.position);
-                }
-            }
-            match slam_eval::compute_ate(&aligned_estimate, &aligned_groundtruth) {
-                Some(stats) => println!(
-                    ", ATE (Sim3-aligned, stereo+IMU, naive fixed-lag window) over {} keyframes: rmse={:.3}m mean={:.3}m median={:.3}m max={:.3}m",
-                    stats.num_points, stats.rmse, stats.mean, stats.median, stats.max
-                ),
-                None => println!(", not enough groundtruth-covered keyframes to compute ATE"),
+    let ate_of = |gt: &slam_eval::GroundTruthTrajectory, poses: &[(u64, nalgebra::Vector3<f64>)]| -> Option<slam_eval::AteStats> {
+        let mut aligned_estimate = Vec::new();
+        let mut aligned_groundtruth = Vec::new();
+        for (t, p) in poses {
+            if let Some(pose) = gt.interpolate(*t) {
+                aligned_estimate.push(*p);
+                aligned_groundtruth.push(pose.position);
             }
         }
+        slam_eval::compute_ate(&aligned_estimate, &aligned_groundtruth)
+    };
+
+    match groundtruth {
+        Some(gt) => match ate_of(gt, &trajectory) {
+            Some(stats) => println!(
+                ", ATE (Sim3-aligned, stereo+IMU, naive fixed-lag window) over {} keyframes: rmse={:.3}m mean={:.3}m median={:.3}m max={:.3}m",
+                stats.num_points, stats.rmse, stats.mean, stats.median, stats.max
+            ),
+            None => println!(", not enough groundtruth-covered keyframes to compute ATE"),
+        },
         None => println!(", no groundtruth available for ATE"),
+    }
+
+    // M8: one global bundle-adjustment pass over every keyframe ever
+    // created (history + current window), reusing the same solver as the
+    // per-window optimization above — reports before/after ATE so the
+    // (typically small, per plan/STAGE1.md "improves or holds") effect is
+    // directly visible rather than just claimed.
+    let before = vio.all_keyframe_poses();
+    if before.len() > params.window_size {
+        let n = vio.global_bundle_adjustment();
+        let after = vio.all_keyframe_poses();
+        let before_world: Vec<_> = before.iter().map(|(t, p)| (*t, p.inverse().translation)).collect();
+        let after_world: Vec<_> = after.iter().map(|(t, p)| (*t, p.inverse().translation)).collect();
+        match groundtruth {
+            Some(gt) => match (ate_of(gt, &before_world), ate_of(gt, &after_world)) {
+                (Some(before_stats), Some(after_stats)) => println!(
+                    "global bundle adjustment: {n} keyframes, ATE rmse before={:.3}m after={:.3}m",
+                    before_stats.rmse, after_stats.rmse
+                ),
+                _ => println!("global bundle adjustment: {n} keyframes, not enough groundtruth coverage for before/after ATE"),
+            },
+            None => println!("global bundle adjustment: {n} keyframes, no groundtruth available for ATE"),
+        }
+    } else {
+        println!("global bundle adjustment: skipped, not enough keyframes evicted past the window yet");
     }
 }
 

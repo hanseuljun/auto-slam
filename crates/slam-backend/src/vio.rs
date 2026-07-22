@@ -128,6 +128,12 @@ pub struct VioPipeline {
     landmarks: Vec<Vector3<f64>>,
     tracks: Vec<Track>,
     window: VecDeque<WindowKeyframe>,
+    /// Keyframes that have slid out of `window` (M5's naive fixed-lag
+    /// dropping, `decisions/0007`) are kept here instead of discarded,
+    /// purely so a later `global_bundle_adjustment` pass (M8) has the
+    /// full trajectory's observations to work with — `run_optimization`
+    /// itself never looks at this, only the current `window`.
+    history: Vec<WindowKeyframe>,
     prev_pyramid: Option<ImagePyramid>,
     imu_buffer: Vec<ImuSample>,
     frame_index: usize,
@@ -155,6 +161,7 @@ impl VioPipeline {
                 });
                 w
             },
+            history: Vec::new(),
             prev_pyramid: None,
             imu_buffer: Vec::new(),
             frame_index: 0,
@@ -278,7 +285,9 @@ impl VioPipeline {
         }
 
         if self.window.len() > self.params.window_size {
-            self.window.pop_front();
+            if let Some(evicted) = self.window.pop_front() {
+                self.history.push(evicted);
+            }
         }
 
         self.run_optimization();
@@ -384,6 +393,79 @@ impl VioPipeline {
         for (&global_id, &local_idx) in &local_landmark_ids {
             self.landmarks[global_id] = problem.landmarks[local_idx];
         }
+    }
+
+    /// `(timestamp, world -> body pose)` for every keyframe ever created
+    /// (retained `history` plus the current `window`), in trajectory
+    /// order — the full picture `run_optimization`'s bounded window never
+    /// sees at once.
+    pub fn all_keyframe_poses(&self) -> Vec<(u64, SE3)> {
+        self.history.iter().chain(self.window.iter()).map(|kf| (kf.timestamp_ns, kf.state.pose)).collect()
+    }
+
+    /// M8: a single "global" bundle-adjustment pass over the *entire*
+    /// retained trajectory (history + current window, in creation order),
+    /// reusing the same `slam_optim::Problem`/`optimize` machinery
+    /// `run_optimization` uses per-window — just with every keyframe
+    /// included instead of a bounded sliding window. A one-shot pass
+    /// (e.g. after loop closure, or at the end of a run), not something
+    /// to call every frame: it re-solves the whole accumulated problem,
+    /// which grows with trajectory length. Returns the number of
+    /// keyframes included. Keyframe 0 (the very first of the whole
+    /// trajectory) remains the sole gauge anchor, same as every windowed
+    /// `run_optimization` call along the way.
+    pub fn global_bundle_adjustment(&mut self) -> usize {
+        let mut local_landmark_ids: HashMap<usize, usize> = HashMap::new();
+        let mut local_landmarks = Vec::new();
+        let mut reprojection_obs = Vec::new();
+        let mut keyframes = Vec::new();
+        let mut imu_factors = Vec::new();
+        let mut bias_rw_factors = Vec::new();
+
+        for (kf_idx, kf) in self.history.iter().chain(self.window.iter()).enumerate() {
+            keyframes.push(kf.state);
+            for obs in &kf.observations {
+                let local_idx = *local_landmark_ids.entry(obs.landmark_id).or_insert_with(|| {
+                    local_landmarks.push(self.landmarks[obs.landmark_id]);
+                    local_landmarks.len() - 1
+                });
+                let t_bs_cam = match obs.camera {
+                    Camera::Cam0 => self.rig.t_bs_cam0,
+                    Camera::Cam1 => self.rig.t_bs_cam1,
+                };
+                reprojection_obs.push(ReprojectionObservation {
+                    keyframe_idx: kf_idx,
+                    landmark_idx: local_idx,
+                    t_bs_cam,
+                    observed_normalized: obs.normalized,
+                });
+            }
+            if let Some((preint, dt)) = &kf.imu_edge {
+                imu_factors.push(ImuFactorSpec { i: kf_idx - 1, j: kf_idx, preint: preint.clone(), dt: *dt });
+                bias_rw_factors.push(BiasRwFactorSpec { i: kf_idx - 1, j: kf_idx });
+            }
+        }
+
+        let total = keyframes.len();
+        let mut problem = Problem {
+            keyframes,
+            landmarks: local_landmarks,
+            reprojection_obs,
+            imu_factors,
+            bias_rw_factors,
+            gravity_world: self.gravity_world,
+        };
+
+        optimize(&mut problem, &self.params.solver);
+
+        for (kf_idx, kf) in self.history.iter_mut().chain(self.window.iter_mut()).enumerate() {
+            kf.state = problem.keyframes[kf_idx];
+        }
+        for (&global_id, &local_idx) in &local_landmark_ids {
+            self.landmarks[global_id] = problem.landmarks[local_idx];
+        }
+
+        total
     }
 }
 

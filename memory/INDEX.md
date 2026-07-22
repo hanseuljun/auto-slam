@@ -4,6 +4,7 @@ One line per entry, newest first within each section. See `README.md` for
 what goes where.
 
 ## progress/
+- [2026-07-21-m8-global-bundle-adjustment.md](progress/2026-07-21-m8-global-bundle-adjustment.md) — M8 done: global BA over the full retained trajectory, reusing slam-optim's Problem/optimize. ATE held (0.1366m→0.1377m) on a short loop-free MH_01 clip — expected; a real win likely needs a longer sequence and/or post-loop-closure.
 - [2026-07-21-m7-loop-closure.md](progress/2026-07-21-m7-loop-closure.md) — M7 done: BoW vocabulary + geometric verification + pose-graph optimization, real MH_05 loop verified, ATE 5.6m→3.3m. Four real bugs found and fixed, including a hidden VoPipeline corruption.
 - [2026-07-21-m6-robust-tracking-and-full-sequence-runs.md](progress/2026-07-21-m6-robust-tracking-and-full-sequence-runs.md) — M6 done: track-loss recovery (VO + IMU-propagation for VIO), LK final-residual fix, full 5-sequence run with zero unrecoverable frames across ~14,000 frames.
 - [2026-07-21-m5-sliding-window-vio-backend.md](progress/2026-07-21-m5-sliding-window-vio-backend.md) — M5 done: `slam-optim` LM+Schur solver, `slam-backend` VioPipeline (naive fixed-lag window), VIO ATE ~matches M3's VO-only on MH_01/04. 81 workspace tests.
