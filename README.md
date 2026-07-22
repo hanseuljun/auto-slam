@@ -138,6 +138,18 @@ every runnable sequence, roughly half the budget to spare. `plan/
 STAGE2.md` now marks M2-M4 deferred rather than required, and M6
 (finishing Stage 1's M10, accuracy tuning) is next.
 
+Stage 2's M6 (in progress) started by closing the gap in the paragraph
+above: `MH_02_easy` and `MH_03_medium` weren't producing any numbers at
+all. Measuring (not guessing) the actual best-achievable stationary
+window per sequence found both were genuinely stationary but just barely
+past the bootstrap threshold (0.093/0.090 rad/s against a 0.09 cutoff,
+`decisions/0015`); loosening it to 0.10 fixed both with real, plausible
+numbers (MH_02 ATE 0.184m, MH_03 0.511m, both well under the real-time
+bar). `docs/RESULTS.md` now has all five `MH_*` sequences for the first
+time this session. Remaining M6 scope: real `sensor.yaml`-derived noise
+weighting (`decisions/0006`), outlier-gating tuning, keyframe/window
+sizing.
+
 ## Building
 
 Requires a Rust toolchain (install via [rustup](https://rustup.rs) if you

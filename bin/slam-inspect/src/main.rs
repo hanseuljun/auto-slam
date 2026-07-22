@@ -290,7 +290,7 @@ fn print_stereo_vo(seq: &slam_dataset::EuRocSequence, groundtruth: Option<&slam_
 /// otherwise/always, reusing the VO keyframes from `print_stereo_vo`.
 fn print_imu_initialization(seq: &slam_dataset::EuRocSequence, vo_keyframes: &[slam_frontend::VoKeyframe]) {
     let all_gyro: Vec<nalgebra::Vector3<f64>> = seq.imu_samples.iter().map(|s| s.gyro).collect();
-    match slam_imu::find_stationary_window(&all_gyro, 200, 0.09) {
+    match slam_imu::find_stationary_window(&all_gyro, 200, 0.10) {
         Some(start) => {
             let gyro = &all_gyro[start..start + 200];
             let accel: Vec<nalgebra::Vector3<f64>> = seq.imu_samples[start..start + 200].iter().map(|s| s.accel).collect();
@@ -344,7 +344,7 @@ fn print_stereo_inertial_vio(seq: &slam_dataset::EuRocSequence, groundtruth: Opt
     }
 
     let all_gyro: Vec<nalgebra::Vector3<f64>> = seq.imu_samples.iter().map(|s| s.gyro).collect();
-    let Some(start) = slam_imu::find_stationary_window(&all_gyro, 200, 0.09) else {
+    let Some(start) = slam_imu::find_stationary_window(&all_gyro, 200, 0.10) else {
         println!("stereo-inertial VIO: no stationary window to bootstrap from, skipping");
         return;
     };

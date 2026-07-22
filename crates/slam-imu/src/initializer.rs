@@ -112,7 +112,7 @@ mod tests {
 
         let all_gyro: Vec<Vector3<f64>> = seq.imu_samples.iter().map(|s| s.gyro).collect();
         let window_size = 200; // 1s at 200Hz.
-        let start = find_stationary_window(&all_gyro, window_size, 0.09)
+        let start = find_stationary_window(&all_gyro, window_size, 0.10)
             .expect("MH_01 should contain a genuinely stationary window");
 
         let gyro = &all_gyro[start..start + window_size];

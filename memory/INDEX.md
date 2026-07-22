@@ -4,6 +4,7 @@ One line per entry, newest first within each section. See `README.md` for
 what goes where.
 
 ## progress/
+- [2026-07-21-stage2-m6-mh0203-bootstrap-fix.md](progress/2026-07-21-stage2-m6-mh0203-bootstrap-fix.md) — Stage 2 M6 (in progress): MH_02/MH_03 now run (were skipped entirely) after loosening the stationary-window threshold from a measured, not guessed, per-sequence gyro-norm analysis (decisions/0015).
 - [2026-07-21-stage2-m5-real-time-bar-met.md](progress/2026-07-21-stage2-m5-real-time-bar-met.md) — Stage 2 M5 done: real-time factor <=1.0 met on every runnable sequence via M1 alone (MH_01 0.543, MH_04 0.398, MH_05 0.523) — M2-M4 re-scoped from required to deferred in plan/STAGE2.md as a result.
 - [2026-07-21-stage2-m1-marginalization.md](progress/2026-07-21-stage2-m1-marginalization.md) — Stage 2 M1 done: real Schur-complement keyframe marginalization (closes decisions/0007). Found and fixed three real bugs, including a latent VioPipeline vulnerability decisions/0009 had explicitly predicted.
 - [2026-07-21-stage2-m0-evaluation-and-timing-harness.md](progress/2026-07-21-stage2-m0-evaluation-and-timing-harness.md) — Stage 2 M0 done: bin/slam-run + docs/RESULTS.md (accuracy + real-time factor vs. published SOTA). Found and fixed a real determinism bug (HashMap iteration order, decisions/0011) along the way.
@@ -20,6 +21,7 @@ what goes where.
 - [2026-07-20-stage1-plan.md](progress/2026-07-20-stage1-plan.md) — wrote `plan/STAGE1.md`, set up CLAUDE.md + this memory directory; no pipeline code yet.
 
 ## decisions/
+- [0015-stationary-window-threshold-loosened-to-0.10.md](decisions/0015-stationary-window-threshold-loosened-to-0.10.md) — find_stationary_window's max_gyro_norm moved 0.09->0.10: MH_02/MH_03's best achievable window was measured at 0.093/0.090, just barely over the old threshold, causing them to skip entirely despite genuinely being stationary.
 - [0014-vio-pipeline-gets-the-pose-jump-guard-decisions-0009-predicted.md](decisions/0014-vio-pipeline-gets-the-pose-jump-guard-decisions-0009-predicted.md) — VioPipeline now rejects implausible PnP pose jumps too (same fix as VoPipeline's decisions/0009), closing a gap that decision explicitly predicted — the real root cause behind M1's marginalization divergence.
 - [0013-marginalization-guards-against-implausible-pose-jumps.md](decisions/0013-marginalization-guards-against-implausible-pose-jumps.md) — marginalization rejects an implausible keyframe-to-keyframe pose jump or non-finite prior result instead of folding it in — naive-drop used to just forget a bad pose, marginalization would otherwise lock it in and diverge.
 - [0012-marginalization-excludes-still-tracked-landmarks.md](decisions/0012-marginalization-excludes-still-tracked-landmarks.md) — marginalization only eliminates a landmark if the live LK tracker (self.tracks), not just other keyframes, no longer needs it — folding in a still-tracked landmark froze its position and degraded future PnP.

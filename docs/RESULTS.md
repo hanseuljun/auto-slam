@@ -40,13 +40,20 @@ notably `VioPipeline` finally getting the PnP pose-jump guard
 improved substantially (1.501m -> 0.455m) — that sequence was hitting
 exactly the corruption `decisions/0014` fixed.
 
+**Updated again after Stage 2 M6's initializer fix** (`decisions/0015`):
+MH_02_easy and MH_03_medium now run — they were skipped entirely before,
+not because they lack a stationary window (both do, matching `plan/
+STAGE1.md`'s own dataset notes) but because the bootstrap threshold was
+measurably too tight for them specifically — see `decisions/0015` for
+the measured per-sequence numbers.
+
 ## ATE RMSE (meters), bounded 600-frame (~30s) clips, no loop closure
 
 | Sequence | This repo (M5+M8+M1, ~30s clip) | ORB-SLAM3 (full seq.) | OKVIS (full seq.) | VINS-Fusion (full seq.) | Kimera (full seq.) |
 |---|---|---|---|---|---|
 | MH_01_easy | 0.169 | 0.036 | 0.079 | 0.166 | 0.080 |
-| MH_02_easy | not run — no stationary window found for IMU bootstrap (see "Known gaps") | 0.033 | 0.044 | 0.152 | 0.090 |
-| MH_03_medium | not run — same reason | 0.035 | 0.096 | 0.125 | 0.110 |
+| MH_02_easy | 0.184 | 0.033 | 0.044 | 0.152 | 0.090 |
+| MH_03_medium | 0.511 | 0.035 | 0.096 | 0.125 | 0.110 |
 | MH_04_difficult | 1.191 | 0.051 | 0.197 | 0.280 | 0.150 |
 | MH_05_difficult | 0.455 | 0.082 | 0.206 | 0.284 | 0.240 |
 
@@ -70,6 +77,8 @@ spare:
 | Sequence | vision (s) | optimization (s) | VIO loop factor | global BA (s, separate) |
 |---|---|---|---|---|
 | MH_01_easy | 13.5 | 2.8 | **0.543** | 2.6 |
+| MH_02_easy | 13.7 | 2.6 | **0.541** | 2.6 |
+| MH_03_medium | 15.5 | 2.9 | **0.615** | 2.3 |
 | MH_04_difficult | 10.4 | 1.5 | **0.398** | 1.6 |
 | MH_05_difficult | 13.1 | 2.5 | **0.523** | 2.0 |
 
@@ -91,14 +100,6 @@ real-time goal — see `plan/STAGE2.md` for the resulting re-scoping.
 
 ## Known gaps (honest, not swept under the rug)
 
-- **MH_02_easy and MH_03_medium don't run at all** — the current
-  stationary-window IMU bootstrap (`slam_imu::find_stationary_window`)
-  doesn't find a usable window in either sequence with its current
-  thresholds, despite both starting stationary per `plan/STAGE1.md`'s own
-  dataset notes. `bin/slam-inspect` shows the same gap independently, so
-  this isn't new. Initializer robustness on the harder sequences is
-  explicitly `plan/STAGE2.md`'s M6 (finishing Stage 1's M10) — this table
-  will grow two more rows once that lands.
 - **Not apples-to-apples with the published numbers on two axes**: (1)
   this repo's numbers are a 30-second bounded clip, not a full sequence
   (~100-180s) — ATE over a shorter clip has less time to accumulate drift,

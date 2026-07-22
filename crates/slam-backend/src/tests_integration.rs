@@ -42,7 +42,7 @@ mod tests {
         // (matching M4's dynamic-init scope, which also fixes accel bias
         // at zero).
         let all_gyro: Vec<Vector3<f64>> = seq.imu_samples.iter().map(|s| s.gyro).collect();
-        let start = find_stationary_window(&all_gyro, 200, 0.09).expect("MH_01 should have a stationary window");
+        let start = find_stationary_window(&all_gyro, 200, 0.10).expect("MH_01 should have a stationary window");
         let accel: Vec<Vector3<f64>> = seq.imu_samples[start..start + 200].iter().map(|s| s.accel).collect();
         let static_init = static_initialize(&all_gyro[start..start + 200], &accel).expect("static init should succeed");
 
@@ -138,7 +138,7 @@ mod tests {
         let rig = stereo_rig(&seq.calibration);
 
         let all_gyro: Vec<Vector3<f64>> = seq.imu_samples.iter().map(|s| s.gyro).collect();
-        let start = find_stationary_window(&all_gyro, 200, 0.09).expect("MH_01 should have a stationary window");
+        let start = find_stationary_window(&all_gyro, 200, 0.10).expect("MH_01 should have a stationary window");
         let accel: Vec<Vector3<f64>> = seq.imu_samples[start..start + 200].iter().map(|s| s.accel).collect();
         let static_init = static_initialize(&all_gyro[start..start + 200], &accel).expect("static init should succeed");
         let initial_state = KeyframeState::new(SE3::identity(), Vector3::zeros(), static_init.gyro_bias, Vector3::zeros());
@@ -220,7 +220,7 @@ mod tests {
         let rig = stereo_rig(&seq.calibration);
 
         let all_gyro: Vec<Vector3<f64>> = seq.imu_samples.iter().map(|s| s.gyro).collect();
-        let start = find_stationary_window(&all_gyro, 200, 0.09).expect("MH_01 should have a stationary window");
+        let start = find_stationary_window(&all_gyro, 200, 0.10).expect("MH_01 should have a stationary window");
         let accel: Vec<Vector3<f64>> = seq.imu_samples[start..start + 200].iter().map(|s| s.accel).collect();
         let static_init = static_initialize(&all_gyro[start..start + 200], &accel).expect("static init should succeed");
         let initial_state = KeyframeState::new(SE3::identity(), Vector3::zeros(), static_init.gyro_bias, Vector3::zeros());

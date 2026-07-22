@@ -108,7 +108,7 @@ fn run_sequence(seq_dir: &Path, out_dir: &Path, full: bool, frame_cap: usize) ->
     let gt = slam_eval::GroundTruthTrajectory::load(&gt_path)?;
 
     let all_gyro: Vec<Vector3<f64>> = seq.imu_samples.iter().map(|s| s.gyro).collect();
-    let Some(start) = slam_imu::find_stationary_window(&all_gyro, 200, 0.09) else {
+    let Some(start) = slam_imu::find_stationary_window(&all_gyro, 200, 0.10) else {
         println!("no stationary window to bootstrap from, skipping");
         return Ok(None);
     };
