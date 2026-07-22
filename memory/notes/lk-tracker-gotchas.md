@@ -41,3 +41,32 @@ outlier gating yet) sees roughly 93-97% raw survival across all five
 `MH_*` sequences. Useful as an informal regression baseline: if a future
 change to the tracker or detector drops this dramatically on the same
 sequences, that's a signal something broke, not just "tracking is hard."
+
+## The determinant check alone doesn't catch "matched into a blank/wrong
+## frame" — added a final-residual check (M6, 2026-07-21)
+
+`min_determinant` only looks at the *template* (previous frame): it asks
+"does this patch have enough texture to constrain a 2D match," not
+"does the current frame actually contain that template anywhere nearby."
+Discovered while writing `slam-frontend`'s track-loss-recovery test: LK
+tracking a well-textured real MH_01 patch into a *blank* (or even
+mid-gray-constant) current frame still reported `found = true` — Gauss-
+Newton just converges to wherever the (contentless) gradient happens to
+push it, and the determinant check (computed only from the template) has
+no way to know the destination is meaningless. Fixed by adding
+`LkParams::max_final_residual`: after convergence, reject the track if the
+mean absolute pixel difference between the template and the final matched
+patch is still too large. This is a real, general robustness fix (not
+just a test-fixture issue) — any genuinely bad match (occlusion, motion
+blur, lighting change) can otherwise silently "succeed."
+
+Also worth remembering: **a uniform mid-gray (128) test frame is not a
+reliable way to force "total, unambiguous track loss"** on real images —
+some real patches (shadows, dark machinery) are naturally close enough to
+mid-gray that their residual against a mid-gray frame can coincidentally
+pass a reasonable threshold. Independent random noise (different seeds
+for left/right, so stereo matching can't trivially self-correlate either)
+is a much more reliable way to force genuine, total track+match failure
+in a test — see `slam_frontend::vo::tests::
+recovers_from_a_forced_blank_frame_instead_of_failing_permanently` and
+`slam_backend`'s equivalent.

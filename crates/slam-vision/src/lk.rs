@@ -13,6 +13,16 @@ pub struct LkParams {
     /// this (a cheap proxy for "both eigenvalues are large enough to
     /// constrain the flow" — the classic KLT trackability criterion).
     pub min_determinant: f32,
+    /// Reject a track if, *after* convergence, the mean absolute pixel
+    /// difference between the template and the matched patch still
+    /// exceeds this. The determinant check alone only asks "does the
+    /// *template* have enough texture to constrain a match" — it says
+    /// nothing about whether the *current* frame actually contains that
+    /// template anywhere nearby (e.g. a textureless/blank current frame
+    /// still has a well-conditioned template and would otherwise "match"
+    /// wherever Gauss-Newton happens to stop). This is the check that
+    /// catches that case.
+    pub max_final_residual: f32,
 }
 
 impl Default for LkParams {
@@ -22,6 +32,7 @@ impl Default for LkParams {
             max_iterations: 20,
             epsilon: 0.01,
             min_determinant: 1.0,
+            max_final_residual: 30.0,
         }
     }
 }
@@ -146,6 +157,17 @@ fn lk_iterate_level(
         }
     }
 
+    let mut abs_diff_sum = 0.0f32;
+    for &(wx, wy, _, _, template_val) in &window {
+        let cx = prev_point.0 + wx + disp.0;
+        let cy = prev_point.1 + wy + disp.1;
+        let curr_val = sample_bilinear(curr_img, cx, cy)?;
+        abs_diff_sum += (template_val - curr_val).abs();
+    }
+    if abs_diff_sum / window.len() as f32 > params.max_final_residual {
+        return None;
+    }
+
     Some(disp)
 }
 
@@ -236,5 +258,27 @@ mod tests {
         img.put_pixel(5, 5, image::Luma([200]));
         let sampled = sample_bilinear(&img, 5.0, 5.0).unwrap();
         assert!((sampled - 200.0).abs() < 1e-6);
+    }
+
+    /// The determinant check alone only looks at the *template* (previous
+    /// frame); it says nothing about whether the *current* frame actually
+    /// contains a matching patch anywhere nearby. A textured previous
+    /// frame tracked into a blank current frame is exactly that gap —
+    /// `found` must still be `false`, via the final-residual check, not
+    /// because the determinant rejected it up front (which it doesn't:
+    /// this test would previously have (wrongly) reported `found = true`
+    /// with `disp` wherever Gauss-Newton happened to stop).
+    #[test]
+    fn rejects_tracking_a_textured_template_into_a_blank_current_frame() {
+        let prev = textured_image(0, 0);
+        let mut blank = GrayImage::new(100, 100);
+        for p in blank.pixels_mut() {
+            *p = image::Luma([128]);
+        }
+        let prev_pyr = ImagePyramid::build(&prev, 3);
+        let blank_pyr = ImagePyramid::build(&blank, 3);
+
+        let results = track_pyramid(&prev_pyr, &blank_pyr, &[(23.0, 23.0)], &LkParams::default());
+        assert!(!results[0].found, "tracking into a blank frame should fail, not silently 'succeed'");
     }
 }

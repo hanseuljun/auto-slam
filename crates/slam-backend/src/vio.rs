@@ -56,6 +56,28 @@ struct Observation {
     normalized: Vector2<f64>,
 }
 
+/// Propagates `prev` forward by the (bias-corrected) preintegrated IMU
+/// measurement, using the same forward physics model
+/// `slam_optim::imu_residual` checks a state *against* — this computes
+/// the predicted state directly, for when there's no vision update to
+/// correct it with (M6's track-loss recovery: coast on IMU alone rather
+/// than failing outright). `state.pose` is `world -> body`, so the
+/// propagation (naturally expressed in `world -> body`'s inverse,
+/// `R_wb`/body's world position) is converted back at the end.
+fn propagate_state(prev: &KeyframeState, preint: &Preintegration, gravity_world: Vector3<f64>, dt: f64) -> KeyframeState {
+    let (delta_r, delta_v, delta_p) = preint.corrected(prev.bias_gyro, prev.bias_accel);
+    let r_wb_prev = prev.pose.rotation.inverse();
+    let p_prev = prev.pose.inverse().translation;
+
+    let r_wb_new = r_wb_prev.compose(&delta_r);
+    let v_new = prev.velocity + gravity_world * dt + r_wb_prev.transform(&delta_v);
+    let p_new = p_prev + prev.velocity * dt + 0.5 * gravity_world * dt * dt + r_wb_prev.transform(&delta_p);
+
+    let r_bw_new = r_wb_new.inverse();
+    let pose_world_to_body = SE3::new(r_bw_new, -r_bw_new.transform(&p_new));
+    KeyframeState::new(pose_world_to_body, v_new, prev.bias_gyro, prev.bias_accel)
+}
+
 struct WindowKeyframe {
     timestamp_ns: u64,
     state: KeyframeState,
@@ -77,6 +99,12 @@ pub struct VioFrameResult {
     pub is_keyframe: bool,
     pub window_len: usize,
     pub num_landmarks: usize,
+    /// `true` if this frame recovered from track loss: too few vision
+    /// tracks survived, so the pose comes from IMU-only propagation
+    /// (`propagate_state`) rather than a PnP/optimizer estimate, with the
+    /// local landmark map reset around it. See `process_frame`'s doc
+    /// comment.
+    pub recovered: bool,
 }
 
 /// A sliding-window visual-inertial odometry pipeline: LK-tracks stereo-
@@ -149,7 +177,14 @@ impl VioPipeline {
     }
 
     /// Processes one stereo frame. `imu_since_last` is the raw IMU stream
-    /// between the previous processed frame and this one.
+    /// between the previous processed frame and this one. If too few
+    /// vision tracks survive (or PnP fails on a degenerate point
+    /// configuration), this is track loss — rather than failing
+    /// permanently, IMU-only propagation (`propagate_state`) provides a
+    /// fallback pose, the local map is reset around it (fresh stereo-
+    /// matched landmarks), and a keyframe is created regardless of the
+    /// usual stride (`VioFrameResult::recovered = true`). Returns `None`
+    /// only if recovery itself finds nothing to re-anchor to.
     pub fn process_frame(&mut self, left: &GrayImage, right: &GrayImage, timestamp_ns: u64, imu_since_last: &[ImuSample]) -> Option<VioFrameResult> {
         self.imu_buffer.extend_from_slice(imu_since_last);
         self.frame_index += 1;
@@ -169,35 +204,12 @@ impl VioPipeline {
         self.tracks = surviving;
         self.prev_pyramid = Some(curr_pyramid);
 
-        if self.tracks.len() < 6 {
-            return None;
-        }
-
-        let is_keyframe = self.frame_index.is_multiple_of(self.params.keyframe_stride);
-        if !is_keyframe {
-            return Some(VioFrameResult {
-                pose_world_to_body: self.window.back().unwrap().state.pose,
-                is_keyframe: false,
-                window_len: self.window.len(),
-                num_landmarks: self.landmarks.len(),
-            });
-        }
-
-        // Initial pose guess via PnP against currently tracked landmarks
-        // (reuses M3's well-tested DLT + Gauss-Newton refine).
-        let points_world: Vec<Vector3<f64>> = self.tracks.iter().map(|t| self.landmarks[t.landmark_id]).collect();
-        let observations: Vec<Vector2<f64>> = self
-            .tracks
-            .iter()
-            .map(|t| self.rig.cam0.unproject_to_normalized(Vector2::new(t.pixel.0 as f64, t.pixel.1 as f64)))
-            .collect();
-        let initial_pose = estimate_pose_dlt(&points_world, &observations)?;
-        let initial_pose = refine_pose_gauss_newton(&points_world, &observations, initial_pose, 10);
-
         let prev_state = self.window.back().unwrap().state;
         let prev_timestamp = self.window.back().unwrap().timestamp_ns;
         let dt = (timestamp_ns - prev_timestamp) as f64 * 1e-9;
 
+        // IMU doesn't care whether vision tracking succeeded — always
+        // preintegrate the buffered samples.
         let mut preint = Preintegration::new(prev_state.bias_gyro, prev_state.bias_accel);
         for pair in self.imu_buffer.windows(2) {
             let step_dt = (pair[1].timestamp_ns - pair[0].timestamp_ns) as f64 * 1e-9;
@@ -205,7 +217,43 @@ impl VioPipeline {
         }
         self.imu_buffer.clear();
 
-        let new_state = KeyframeState::new(initial_pose, prev_state.velocity, prev_state.bias_gyro, prev_state.bias_accel);
+        let vision_pose = if self.tracks.len() >= 6 {
+            // PnP against currently tracked landmarks (reuses M3's well-
+            // tested DLT + Gauss-Newton refine).
+            let points_world: Vec<Vector3<f64>> = self.tracks.iter().map(|t| self.landmarks[t.landmark_id]).collect();
+            let observations: Vec<Vector2<f64>> = self
+                .tracks
+                .iter()
+                .map(|t| self.rig.cam0.unproject_to_normalized(Vector2::new(t.pixel.0 as f64, t.pixel.1 as f64)))
+                .collect();
+            estimate_pose_dlt(&points_world, &observations).map(|initial| refine_pose_gauss_newton(&points_world, &observations, initial, 10))
+        } else {
+            None
+        };
+
+        let (initial_pose, initial_velocity, is_keyframe, recovered) = match vision_pose {
+            Some(pose) => (pose, prev_state.velocity, self.frame_index.is_multiple_of(self.params.keyframe_stride), false),
+            None => {
+                let propagated = propagate_state(&prev_state, &preint, self.gravity_world, dt);
+                (propagated.pose, propagated.velocity, true, true)
+            }
+        };
+
+        if !is_keyframe {
+            return Some(VioFrameResult {
+                pose_world_to_body: self.window.back().unwrap().state.pose,
+                is_keyframe: false,
+                window_len: self.window.len(),
+                num_landmarks: self.landmarks.len(),
+                recovered: false,
+            });
+        }
+
+        if recovered {
+            self.tracks.clear();
+        }
+
+        let new_state = KeyframeState::new(initial_pose, initial_velocity, prev_state.bias_gyro, prev_state.bias_accel);
         let mut new_kf = WindowKeyframe {
             timestamp_ns,
             state: new_state,
@@ -221,6 +269,14 @@ impl VioPipeline {
 
         self.add_new_landmarks(left, right, &new_state, new_keyframe_idx);
 
+        if recovered && self.tracks.is_empty() {
+            // Nothing to re-anchor to (e.g. a genuinely blank frame) —
+            // undo the tentative keyframe and report unrecoverable, same
+            // contract as the doc comment promises.
+            self.window.pop_back();
+            return None;
+        }
+
         if self.window.len() > self.params.window_size {
             self.window.pop_front();
         }
@@ -232,6 +288,7 @@ impl VioPipeline {
             is_keyframe: true,
             window_len: self.window.len(),
             num_landmarks: self.landmarks.len(),
+            recovered,
         })
     }
 
@@ -327,5 +384,47 @@ impl VioPipeline {
         for (&global_id, &local_idx) in &local_landmark_ids {
             self.landmarks[global_id] = problem.landmarks[local_idx];
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_relative_eq;
+    use slam_core::SO3;
+
+    /// Same synthetic model as `slam_optim::imu_factor`'s and
+    /// `slam_frontend::vi_init`'s tests (constant angular + world
+    /// velocity under gravity): `propagate_state` from keyframe i's true
+    /// state using a preintegration built from the same raw IMU should
+    /// land on keyframe j's true state — the forward-model counterpart of
+    /// `imu_residual`'s zero-residual check.
+    #[test]
+    fn propagate_state_matches_ground_truth_motion() {
+        let w_true = Vector3::new(0.2, -0.15, 0.25);
+        let v_true = Vector3::new(0.4, 0.1, -0.15);
+        let g_true = Vector3::new(0.0, 0.0, -9.81);
+        let dt_total = 0.5;
+
+        let body_pose_at = |t: f64| SE3::new(SO3::exp(w_true * t), v_true * t);
+        let world_to_body_at = |t: f64| body_pose_at(t).inverse();
+
+        let prev = KeyframeState::new(world_to_body_at(0.0), v_true, Vector3::zeros(), Vector3::zeros());
+        let expected_next = KeyframeState::new(world_to_body_at(dt_total), v_true, Vector3::zeros(), Vector3::zeros());
+
+        let rate_hz = 200.0;
+        let steps = (dt_total * rate_hz) as usize;
+        let dt_step = 1.0 / rate_hz;
+        let mut preint = Preintegration::new(Vector3::zeros(), Vector3::zeros());
+        for i in 0..steps {
+            let t = i as f64 * dt_step;
+            let r_wb = body_pose_at(t).rotation;
+            let specific_force = r_wb.inverse().transform(&(-g_true));
+            preint.integrate_measurement(w_true, specific_force, dt_step);
+        }
+
+        let propagated = propagate_state(&prev, &preint, g_true, dt_total);
+        assert_relative_eq!(propagated.pose.matrix(), expected_next.pose.matrix(), epsilon = 1e-3);
+        assert_relative_eq!(propagated.velocity, expected_next.velocity, epsilon = 1e-3);
     }
 }

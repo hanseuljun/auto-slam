@@ -16,11 +16,12 @@ plan, scope, and accuracy target.
 
 ## Status
 
-Stage 1 milestones M0-M5 are done: stereo visual odometry, IMU
-preintegration/initialization, and — as of M5 — a sliding-window backend
-that jointly optimizes both together. See [`plan/STAGE1.md`](plan/STAGE1.md)
-for the milestone list and [`memory/progress/`](memory/progress/) for a
-session-by-session log of what landed and when.
+Stage 1 milestones M0-M6 are done: stereo visual odometry, IMU
+preintegration/initialization, a sliding-window backend that jointly
+optimizes both, and track-loss recovery verified across full, un-
+truncated real sequences. See [`plan/STAGE1.md`](plan/STAGE1.md) for the
+milestone list and [`memory/progress/`](memory/progress/) for a session-
+by-session log of what landed and when.
 
 | Milestone | What it adds | Status |
 |---|---|---|
@@ -30,7 +31,8 @@ session-by-session log of what landed and when.
 | M3 | Stereo matching + VO pipeline, first ATE checkpoint | Done |
 | M4 | IMU preintegration + static/dynamic VI initialization | Done |
 | M5 | Sliding-window VIO backend (fuses M3's VO with M4's IMU) | Done |
-| M6-M10 | Robustness, loop closure, global BA, evaluation harness, accuracy tuning | Not started |
+| M6 | Track-loss recovery, robustness, full-sequence runs | Done |
+| M7-M10 | Loop closure, global BA, evaluation harness, accuracy tuning | Not started |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
@@ -47,7 +49,14 @@ window: ATE currently ~matches, not yet clearly beats, the VO-only number
 on the same clip — expected given the backend's window is still naive
 fixed-lag (no marginalization) and uses ad hoc, not covariance-derived,
 noise weights (`memory/decisions/0006-...md`, `0007-...md`); closing that
-gap is explicitly M10's job, not a sign M5 is broken.
+gap is explicitly M10's job, not a sign M5 is broken. As of M6, an
+`#[ignore]`d (expensive, run manually) test runs every frame of every
+`MH_*` sequence end-to-end (~14,000 frames total) with zero unrecoverable
+tracking failures — full-sequence ATE is multiple meters (expected: pure
+VO/VIO drift with no loop closure or global BA yet, not a regression from
+the short-clip numbers above), but the pipeline never gets permanently
+lost, recovering (fresh landmarks, or IMU-only propagation for the VIO
+pipeline) whenever a frame is genuinely untrackable.
 
 ## Building
 

@@ -123,4 +123,84 @@ mod tests {
         // marginalization should close this gap.
         assert!(stats.rmse < 1.5, "VIO ATE RMSE unexpectedly large: {}", stats.rmse);
     }
+
+    /// M6's track-loss-recovery checkpoint for the full VIO pipeline
+    /// (mirrors `slam_frontend::vo::tests`' VO-only version): force total
+    /// vision track loss with independent random noise frames, confirm
+    /// `process_frame` neither panics nor gets stuck permanently lost —
+    /// it recovers via IMU-only propagation (`propagate_state`) on the
+    /// next real frame, and normal tracking resumes afterward.
+    #[test]
+    fn recovers_from_forced_track_loss_via_imu_propagation() {
+        let seq = load_sequence("MH_01_easy");
+        let rig = stereo_rig(&seq.calibration);
+
+        let all_gyro: Vec<Vector3<f64>> = seq.imu_samples.iter().map(|s| s.gyro).collect();
+        let start = find_stationary_window(&all_gyro, 200, 0.09).expect("MH_01 should have a stationary window");
+        let accel: Vec<Vector3<f64>> = seq.imu_samples[start..start + 200].iter().map(|s| s.accel).collect();
+        let static_init = static_initialize(&all_gyro[start..start + 200], &accel).expect("static init should succeed");
+        let initial_state = KeyframeState::new(SE3::identity(), Vector3::zeros(), static_init.gyro_bias, Vector3::zeros());
+        let gravity_world = static_init.gravity_direction_body * static_init.gravity_magnitude;
+
+        let left0 = seq.load_cam0_image(0).unwrap();
+        let right0 = seq.load_cam1_image(0).unwrap();
+        let mut vio = VioPipeline::new(rig, initial_state, seq.cam0_frames[0].timestamp_ns, gravity_world, VioParams::default());
+        vio.init_map(&left0, &right0);
+
+        let mut prev_timestamp = seq.cam0_frames[0].timestamp_ns;
+        let imu_since = |seq: &EuRocSequence, prev: u64, curr: u64| -> Vec<_> {
+            seq.imu_samples.iter().filter(|s| s.timestamp_ns > prev && s.timestamp_ns <= curr).cloned().collect()
+        };
+
+        // A few normal frames first.
+        for i in 1..4 {
+            let left = seq.load_cam0_image(i).unwrap();
+            let right = seq.load_cam1_image(i).unwrap();
+            let timestamp = seq.cam0_frames[i].timestamp_ns;
+            let imu = imu_since(&seq, prev_timestamp, timestamp);
+            vio.process_frame(&left, &right, timestamp, &imu).expect("normal frames should track fine");
+            prev_timestamp = timestamp;
+        }
+
+        // Force total track loss with independent noise frames (see
+        // slam_frontend::vo::tests for why noise, not a blank/constant
+        // image, is the reliable way to do this on real image content).
+        let random_noise_image = |seed: u32| -> image::GrayImage {
+            let mut img = image::GrayImage::new(752, 480);
+            let mut state = seed;
+            for p in img.pixels_mut() {
+                state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+                *p = image::Luma([(state >> 24) as u8]);
+            }
+            img
+        };
+        let noise_left = random_noise_image(1);
+        let noise_right = random_noise_image(2);
+        let noise_timestamp = prev_timestamp + 50_000_000; // +50ms, a plausible frame gap
+        let imu = imu_since(&seq, prev_timestamp, noise_timestamp);
+        let noise_result = vio.process_frame(&noise_left, &noise_right, noise_timestamp, &imu);
+        assert!(noise_result.is_none(), "independent noise frames should be genuinely unrecoverable on their own");
+        prev_timestamp = noise_timestamp;
+
+        // The next real frame should trigger IMU-propagation recovery.
+        let left5 = seq.load_cam0_image(5).unwrap();
+        let right5 = seq.load_cam1_image(5).unwrap();
+        let timestamp5 = seq.cam0_frames[5].timestamp_ns;
+        let imu = imu_since(&seq, prev_timestamp, timestamp5);
+        let recovered = vio.process_frame(&left5, &right5, timestamp5, &imu).expect("should recover via IMU propagation");
+        assert!(recovered.recovered);
+        assert!(recovered.num_landmarks > 0);
+        prev_timestamp = timestamp5;
+
+        // Tracking should continue normally afterward.
+        for i in 6..10 {
+            let left = seq.load_cam0_image(i).unwrap();
+            let right = seq.load_cam1_image(i).unwrap();
+            let timestamp = seq.cam0_frames[i].timestamp_ns;
+            let imu = imu_since(&seq, prev_timestamp, timestamp);
+            let result = vio.process_frame(&left, &right, timestamp, &imu).expect("should keep tracking after recovery");
+            assert!(!result.recovered);
+            prev_timestamp = timestamp;
+        }
+    }
 }

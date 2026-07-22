@@ -4,6 +4,7 @@ One line per entry, newest first within each section. See `README.md` for
 what goes where.
 
 ## progress/
+- [2026-07-21-m6-robust-tracking-and-full-sequence-runs.md](progress/2026-07-21-m6-robust-tracking-and-full-sequence-runs.md) — M6 done: track-loss recovery (VO + IMU-propagation for VIO), LK final-residual fix, full 5-sequence run with zero unrecoverable frames across ~14,000 frames.
 - [2026-07-21-m5-sliding-window-vio-backend.md](progress/2026-07-21-m5-sliding-window-vio-backend.md) — M5 done: `slam-optim` LM+Schur solver, `slam-backend` VioPipeline (naive fixed-lag window), VIO ATE ~matches M3's VO-only on MH_01/04. 81 workspace tests.
 - [2026-07-21-m4-imu-preintegration-and-initializers.md](progress/2026-07-21-m4-imu-preintegration-and-initializers.md) — M4 done: `slam-imu` preintegration + static initializer, `slam-frontend` dynamic VI initializer, 69 workspace tests. Includes a debugging-technique writeup worth rereading before the next tricky linear-algebra bug.
 - [2026-07-20-m3-stereo-vo-checkpoint.md](progress/2026-07-20-m3-stereo-vo-checkpoint.md) — M3 done: stereo matching + `VoPipeline` in `slam-frontend`, first ATE checkpoint (11-17cm RMSE, VO-only) across all 5 MH_* sequences.
@@ -22,5 +23,5 @@ what goes where.
 - [0001-dependency-and-modality-policy.md](decisions/0001-dependency-and-modality-policy.md) — infra crates OK, SLAM logic hand-written; target is stereo+IMU (VIO) with loop closure, not stereo-only or mono-inertial.
 
 ## notes/
-- [lk-tracker-gotchas.md](notes/lk-tracker-gotchas.md) — pyramidal LK bugs/fixes: coarse-level window bounds shouldn't kill a whole track, aperture-problem test-fixture trap, informal MH_01 survival-rate baseline.
+- [lk-tracker-gotchas.md](notes/lk-tracker-gotchas.md) — pyramidal LK bugs/fixes: coarse-level window bounds, aperture-problem test-fixture trap, informal survival-rate baseline, final-residual check (M6) and why noise beats blank frames for forcing test track loss.
 - [dataset-quirks.md](notes/dataset-quirks.md) — EuRoC `machine_hall` layout, timestamp/sync gotchas, static vs. dynamic sequence starts.

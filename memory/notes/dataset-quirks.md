@@ -73,6 +73,15 @@ Each sequence (`MH_01_easy` .. `MH_05_difficult`) has `mav0/` with:
   independent time-sorted streams (see `EventStream` in
   `crates/slam-dataset/src/events.rs`) precisely because of this. Stereo
   matching downstream must pair frames by nearest timestamp, not by index.
+  **This bit test/driver code for real, 2026-07-21**: a full-sequence M6
+  robustness test iterated `0..seq.cam0_frames.len()` and called both
+  `load_cam0_image(i)` and `load_cam1_image(i)` with the same `i`, which
+  panics (index out of bounds) on MH_04's last frame specifically because
+  of this mismatch. `slam_frontend`'s own pipelines don't have this bug
+  (they take pre-loaded image buffers, not sequence+index), but *any* test
+  or driver code that loads both cameras by a shared loop index needs to
+  bound by `min(cam0_frames.len(), cam1_frames.len())`, not just one of
+  them — MH_04 is the sequence that will catch you if you don't.
 - **IMU timestamps jitter around the nominal 200 Hz rate**, not exactly
   5,000,000 ns apart (observed deltas like 5,000,192 ns on MH_01). Any test
   or code asserting IMU cadence needs a tolerance, not exact equality.
