@@ -17,6 +17,7 @@ slam-frontend.workspace = true
 slam-imu.workspace = true
 slam-optim.workspace = true
 slam-backend.workspace = true
+slam-loopclosure.workspace = true
 nalgebra.workspace = true
 image.workspace = true
 anyhow.workspace = true

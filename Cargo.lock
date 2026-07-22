@@ -596,6 +596,7 @@ dependencies = [
  "slam-frontend",
  "slam-geometry",
  "slam-imu",
+ "slam-loopclosure",
  "slam-optim",
  "slam-vision",
 ]
@@ -604,7 +605,15 @@ dependencies = [
 name = "slam-loopclosure"
 version = "0.1.0"
 dependencies = [
+ "approx",
+ "image",
  "nalgebra",
+ "slam-core",
+ "slam-dataset",
+ "slam-eval",
+ "slam-frontend",
+ "slam-geometry",
+ "slam-vision",
 ]
 
 [[package]]

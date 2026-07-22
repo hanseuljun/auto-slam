@@ -1,13 +1,15 @@
-//! Vision frontend primitives (Stage 1 milestone M2): image pyramids,
-//! grid-distributed FAST corner detection, and pyramidal Lucas-Kanade
-//! optical flow. LK is the primary temporal tracker; a descriptor for
-//! loop closure/relocalization comes later (M7), per
-//! `plan/STAGE1.md`'s M2 recommendation.
+//! Vision frontend primitives: image pyramids, grid-distributed FAST
+//! corner detection, and pyramidal Lucas-Kanade optical flow (M2) — LK is
+//! the primary temporal tracker — plus a BRIEF-style binary descriptor
+//! (M7) for loop closure/relocalization, per `plan/STAGE1.md`'s M2
+//! recommendation to defer the descriptor until that's needed.
 
+mod descriptor;
 mod fast;
 mod lk;
 mod pyramid;
 
+pub use descriptor::{compute_descriptor, Descriptor};
 pub use fast::{detect_fast, detect_grid, Keypoint};
 pub use lk::{track_pyramid, LkParams, TrackResult};
 pub use pyramid::ImagePyramid;

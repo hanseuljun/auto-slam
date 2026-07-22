@@ -16,12 +16,13 @@ plan, scope, and accuracy target.
 
 ## Status
 
-Stage 1 milestones M0-M6 are done: stereo visual odometry, IMU
+Stage 1 milestones M0-M7 are done: stereo visual odometry, IMU
 preintegration/initialization, a sliding-window backend that jointly
-optimizes both, and track-loss recovery verified across full, un-
-truncated real sequences. See [`plan/STAGE1.md`](plan/STAGE1.md) for the
-milestone list and [`memory/progress/`](memory/progress/) for a session-
-by-session log of what landed and when.
+optimizes both, track-loss recovery verified across full, un-truncated
+real sequences, and loop closure with a measurable, real-data accuracy
+win. See [`plan/STAGE1.md`](plan/STAGE1.md) for the milestone list and
+[`memory/progress/`](memory/progress/) for a session-by-session log of
+what landed and when.
 
 | Milestone | What it adds | Status |
 |---|---|---|
@@ -32,7 +33,8 @@ by-session log of what landed and when.
 | M4 | IMU preintegration + static/dynamic VI initialization | Done |
 | M5 | Sliding-window VIO backend (fuses M3's VO with M4's IMU) | Done |
 | M6 | Track-loss recovery, robustness, full-sequence runs | Done |
-| M7-M10 | Loop closure, global BA, evaluation harness, accuracy tuning | Not started |
+| M7 | Loop closure (BoW, geometric verification, pose graph) | Done |
+| M8-M10 | Global BA, evaluation harness, accuracy tuning | Not started |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
@@ -56,7 +58,11 @@ tracking failures — full-sequence ATE is multiple meters (expected: pure
 VO/VIO drift with no loop closure or global BA yet, not a regression from
 the short-clip numbers above), but the pipeline never gets permanently
 lost, recovering (fresh landmarks, or IMU-only propagation for the VIO
-pipeline) whenever a frame is genuinely untrackable.
+pipeline) whenever a frame is genuinely untrackable. As of M7, MH_05
+(the sequence with a real loop — it revisits its own start position at
+the very end, after ~98m of travel) shows a real, measurable loop-closure
+win: BoW place recognition + geometric verification + pose-graph
+optimization takes full-sequence ATE from ~5.6m down to ~3.3m.
 
 ## Building
 
@@ -98,6 +104,10 @@ above is real, not just claimed):
 - stereo-inertial VIO stats (sequences with a stationary bootstrap window
   only): landmarks, keyframes, and ATE for the full sliding-window
   backend — directly comparable to the stereo-VO-only ATE above
+- loop closure (MH_05 only — the sequence with a real, documented loop):
+  the detected/verified revisit and ATE with vs. without pose-graph
+  optimization, run over the full sequence (takes ~40s in release, so
+  this section alone dominates the tool's runtime)
 - a raw ground-truth trajectory summary (span, bounding box) as a sanity
   check on units/frame
 

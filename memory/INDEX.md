@@ -4,6 +4,7 @@ One line per entry, newest first within each section. See `README.md` for
 what goes where.
 
 ## progress/
+- [2026-07-21-m7-loop-closure.md](progress/2026-07-21-m7-loop-closure.md) — M7 done: BoW vocabulary + geometric verification + pose-graph optimization, real MH_05 loop verified, ATE 5.6m→3.3m. Four real bugs found and fixed, including a hidden VoPipeline corruption.
 - [2026-07-21-m6-robust-tracking-and-full-sequence-runs.md](progress/2026-07-21-m6-robust-tracking-and-full-sequence-runs.md) — M6 done: track-loss recovery (VO + IMU-propagation for VIO), LK final-residual fix, full 5-sequence run with zero unrecoverable frames across ~14,000 frames.
 - [2026-07-21-m5-sliding-window-vio-backend.md](progress/2026-07-21-m5-sliding-window-vio-backend.md) — M5 done: `slam-optim` LM+Schur solver, `slam-backend` VioPipeline (naive fixed-lag window), VIO ATE ~matches M3's VO-only on MH_01/04. 81 workspace tests.
 - [2026-07-21-m4-imu-preintegration-and-initializers.md](progress/2026-07-21-m4-imu-preintegration-and-initializers.md) — M4 done: `slam-imu` preintegration + static initializer, `slam-frontend` dynamic VI initializer, 69 workspace tests. Includes a debugging-technique writeup worth rereading before the next tricky linear-algebra bug.
@@ -14,6 +15,8 @@ what goes where.
 - [2026-07-20-stage1-plan.md](progress/2026-07-20-stage1-plan.md) — wrote `plan/STAGE1.md`, set up CLAUDE.md + this memory directory; no pipeline code yet.
 
 ## decisions/
+- [0009-vo-rejects-implausible-pose-jumps.md](decisions/0009-vo-rejects-implausible-pose-jumps.md) — VoPipeline now rejects PnP poses implying implausible translation jumps; a real corruption found by M7's full-MH_05 test, invisible to M6's own Sim3-aligned ATE checkpoint.
+- [0008-loop-closure-descriptor-matching-needs-ratio-test.md](decisions/0008-loop-closure-descriptor-matching-needs-ratio-test.md) — M7's descriptor matching needed a Lowe's-ratio-test filter, not just an absolute Hamming threshold, to get real geometric verification working on MH_05.
 - [0007-m5-backend-is-naive-fixed-lag-not-marginalized.md](decisions/0007-m5-backend-is-naive-fixed-lag-not-marginalized.md) — M5's sliding window drops the oldest keyframe outright instead of marginalizing it into a prior; a documented staged-scope choice, not an oversight.
 - [0006-imu-factor-uses-numerical-jacobians.md](decisions/0006-imu-factor-uses-numerical-jacobians.md) — slam-optim's IMU factor uses central-difference numerical Jacobians instead of 18 hand-derived analytic blocks; reprojection factor still analytic.
 - [0005-dynamic-init-fixes-accel-bias-at-zero.md](decisions/0005-dynamic-init-fixes-accel-bias-at-zero.md) — M4's dynamic VI initializer fixes accel bias at zero instead of solving for it jointly; confirmed exact rank deficiency, not an oversight.

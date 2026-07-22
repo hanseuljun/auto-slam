@@ -102,6 +102,14 @@ fn inspect_sequence(seq_dir: &Path) -> anyhow::Result<()> {
     let vo_keyframes = print_stereo_vo(&seq, groundtruth.as_ref());
     print_imu_initialization(&seq, &vo_keyframes);
     print_stereo_inertial_vio(&seq, groundtruth.as_ref());
+    if name == "MH_05_difficult" {
+        // The only MH_* sequence with a real, documented loop (it
+        // revisits its own start position at the very end) — see
+        // memory/notes/dataset-quirks.md. A full-sequence VO run +
+        // vocabulary training is real work, so this isn't run for every
+        // sequence.
+        print_loop_closure(&seq, groundtruth.as_ref());
+    }
 
     println!();
     Ok(())
@@ -414,6 +422,118 @@ fn print_stereo_inertial_vio(seq: &slam_dataset::EuRocSequence, groundtruth: Opt
         }
         None => println!(", no groundtruth available for ATE"),
     }
+}
+
+/// Demonstrates M7 (`slam-loopclosure`): runs stereo VO over the full
+/// sequence, captures loop-closure-ready keyframes (stereo-matched
+/// landmarks + BRIEF descriptors) at a fixed stride, trains a BoW
+/// vocabulary, detects + geometrically verifies a revisit, and reports
+/// ATE with vs. without the resulting pose-graph optimization — directly
+/// comparable numbers, so the improvement (or lack of one) is visible.
+fn print_loop_closure(seq: &slam_dataset::EuRocSequence, groundtruth: Option<&slam_eval::GroundTruthTrajectory>) {
+    let Some(gt) = groundtruth else {
+        println!("loop closure: no groundtruth available, skipping");
+        return;
+    };
+
+    let cal = &seq.calibration;
+    let rig = slam_geometry::StereoRig {
+        t_bs_cam0: slam_core::SE3::from_matrix(&cal.cam0.t_bs),
+        t_bs_cam1: slam_core::SE3::from_matrix(&cal.cam1.t_bs),
+        cam0: slam_geometry::PinholeCamera::new(cal.cam0.intrinsics, cal.cam0.distortion_coefficients),
+        cam1: slam_geometry::PinholeCamera::new(cal.cam1.intrinsics, cal.cam1.distortion_coefficients),
+    };
+    let rect = rig.rectify();
+    let mut vo = slam_frontend::VoPipeline::new(rig.clone(), slam_frontend::VoParams::default());
+
+    let num_frames = seq.cam0_frames.len().min(seq.cam1_frames.len());
+    let stride = 20usize;
+
+    let left0 = seq.load_cam0_image(0).expect("decode frame 0");
+    let right0 = seq.load_cam1_image(0).expect("decode frame 0");
+    vo.init(&left0, &right0);
+
+    let mut node_timestamps = vec![seq.cam0_frames[0].timestamp_ns];
+    let mut vo_poses = vec![slam_core::SE3::identity()];
+    let meta0 = slam_loopclosure::KeyframeMeta { keyframe_id: 0, timestamp_ns: seq.cam0_frames[0].timestamp_ns, pose_world_to_cam0: slam_core::SE3::identity() };
+    let mut keyframes = vec![slam_loopclosure::capture_loop_keyframe(&left0, &right0, meta0, &rig, &rect, &slam_loopclosure::CaptureParams::default())];
+
+    for i in 1..num_frames {
+        let left = seq.load_cam0_image(i).expect("decode frame");
+        let right = seq.load_cam1_image(i).expect("decode frame");
+        let Some(result) = vo.process_frame(&left, &right) else {
+            println!("loop closure: VO lost tracking at frame {i}, skipping");
+            return;
+        };
+        if i % stride == 0 {
+            let node_id = node_timestamps.len();
+            node_timestamps.push(seq.cam0_frames[i].timestamp_ns);
+            vo_poses.push(result.pose_world_to_cam0);
+            let meta = slam_loopclosure::KeyframeMeta { keyframe_id: node_id, timestamp_ns: seq.cam0_frames[i].timestamp_ns, pose_world_to_cam0: result.pose_world_to_cam0 };
+            keyframes.push(slam_loopclosure::capture_loop_keyframe(&left, &right, meta, &rig, &rect, &slam_loopclosure::CaptureParams::default()));
+        }
+    }
+
+    let all_descriptors: Vec<_> = keyframes.iter().flat_map(|k| k.descriptors.iter().copied()).collect();
+    if all_descriptors.len() < 500 {
+        println!("loop closure: too few descriptors gathered, skipping");
+        return;
+    }
+    let vocab = slam_loopclosure::Vocabulary::train(&all_descriptors, 300, 6, 17);
+
+    let mut db = slam_loopclosure::KeyframeDatabase::new();
+    for kf in &keyframes {
+        db.insert(kf.keyframe_id, vocab.compute_bow(&kf.descriptors));
+    }
+
+    let min_id_gap = 30;
+    let mut best_loop: Option<(usize, usize, slam_loopclosure::VerifiedLoop)> = None;
+    for kf in &keyframes {
+        let query_bow = vocab.compute_bow(&kf.descriptors);
+        let Some((candidate_id, _)) = db.query(kf.keyframe_id, &query_bow, min_id_gap, 0.3) else {
+            continue;
+        };
+        let candidate = &keyframes[candidate_id];
+        let Some(verified) = slam_loopclosure::verify_loop_candidate(&kf.normalized, &kf.descriptors, &candidate.descriptors, &candidate.landmarks_world, &slam_loopclosure::GeometricVerificationParams::default()) else {
+            continue;
+        };
+        if best_loop.as_ref().map(|(_, _, v)| verified.num_inliers > v.num_inliers).unwrap_or(true) {
+            best_loop = Some((kf.keyframe_id, candidate_id, verified));
+        }
+    }
+    let Some((current_id, candidate_id, verified)) = best_loop else {
+        println!("loop closure: no loop detected/verified");
+        return;
+    };
+
+    let mut edges = Vec::new();
+    for i in 0..vo_poses.len() - 1 {
+        let relative = vo_poses[i + 1].compose(&vo_poses[i].inverse());
+        edges.push(slam_loopclosure::PoseGraphEdge { i, j: i + 1, relative_pose: relative, weight: 1.0 });
+    }
+    let relative_pose = verified.relative_pose.compose(&vo_poses[candidate_id].inverse());
+    edges.push(slam_loopclosure::PoseGraphEdge { i: candidate_id, j: current_id, relative_pose, weight: 5000.0 });
+
+    let ate_of = |poses: &[slam_core::SE3]| -> Option<f64> {
+        let mut est = Vec::new();
+        let mut truth = Vec::new();
+        for (t, p) in node_timestamps.iter().zip(poses.iter()) {
+            if let Some(pose) = gt.interpolate(*t) {
+                est.push(p.inverse().translation);
+                truth.push(pose.position);
+            }
+        }
+        slam_eval::compute_ate(&est, &truth).map(|s| s.rmse)
+    };
+    let ate_without = ate_of(&vo_poses).unwrap_or(f64::NAN);
+    let mut optimized_poses = vo_poses.clone();
+    slam_loopclosure::optimize_pose_graph(&mut optimized_poses, &edges, 0, 50);
+    let ate_with = ate_of(&optimized_poses).unwrap_or(f64::NAN);
+
+    println!(
+        "loop closure: keyframe {current_id} <-> {candidate_id} ({} inliers), ATE without={ate_without:.3}m with={ate_with:.3}m",
+        verified.num_inliers
+    );
 }
 
 fn print_groundtruth_summary(traj: &slam_eval::GroundTruthTrajectory) {

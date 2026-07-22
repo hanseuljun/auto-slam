@@ -19,6 +19,17 @@ pub struct VoParams {
     /// count drops below this.
     pub min_tracks_before_keyframe: usize,
     pub min_tracks_for_pose: usize,
+    /// Reject a PnP pose outright (treat as track loss, triggering
+    /// recovery) if it implies a per-frame translation jump larger than
+    /// this. DLT+refine has no RANSAC/outlier rejection
+    /// (`decisions/0003`) and, on a long real run, occasionally produces
+    /// a catastrophically wrong pose (observed: translations in the
+    /// billions of meters) from a degenerate point configuration while
+    /// still numerically "succeeding" — this catches that before it
+    /// corrupts the trajectory and every landmark triangulated
+    /// afterward. 2m/frame is already far beyond any plausible MAV motion
+    /// at these datasets' ~20Hz frame rate.
+    pub max_pose_jump_meters: f64,
     pub lk: LkParams,
     pub stereo: StereoMatchParams,
 }
@@ -32,6 +43,7 @@ impl Default for VoParams {
             min_new_landmark_pixel_distance: 12.0,
             min_tracks_before_keyframe: 120,
             min_tracks_for_pose: 6,
+            max_pose_jump_meters: 2.0,
             lk: LkParams::default(),
             stereo: StereoMatchParams::default(),
         }
@@ -140,7 +152,12 @@ impl VoPipeline {
                 .iter()
                 .map(|t| self.rig.cam0.unproject_to_normalized(Vector2::new(t.pixel.0 as f64, t.pixel.1 as f64)))
                 .collect();
-            estimate_pose_dlt(&points_world, &observations).map(|initial| refine_pose_gauss_newton(&points_world, &observations, initial, 10))
+            estimate_pose_dlt(&points_world, &observations)
+                .map(|initial| refine_pose_gauss_newton(&points_world, &observations, initial, 10))
+                .filter(|pose| {
+                    let jump = (pose.inverse().translation - self.last_pose.inverse().translation).norm();
+                    jump.is_finite() && jump < self.params.max_pose_jump_meters
+                })
         } else {
             None
         };

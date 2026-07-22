@@ -85,3 +85,13 @@ Each sequence (`MH_01_easy` .. `MH_05_difficult`) has `mav0/` with:
 - **IMU timestamps jitter around the nominal 200 Hz rate**, not exactly
   5,000,000 ns apart (observed deltas like 5,000,192 ns on MH_01). Any test
   or code asserting IMU cadence needs a tolerance, not exact equality.
+- **MH_05's loop is at the very end of the sequence, not reachable from a
+  short clip.** Confirmed via groundtruth 2026-07-21: position at t=111s
+  (near the sequence's end, ~2273 frames in) is within 0.15m of the t=0s
+  start position, after ~98m of actual travel in between — a genuine
+  "flies a loop and comes back to start" trajectory. M7's loop-closure
+  checkpoint needs the (near-)full sequence to see this; testing on an
+  early clip (e.g. the first 1600 frames, which covers other milestones'
+  checkpoints fine) will never find a loop to detect. In VO keyframe terms
+  (stride 20 frames), the verified correspondence is keyframe ~22
+  (~22s in) <-> keyframe ~111 (~111s in, near the very end).
