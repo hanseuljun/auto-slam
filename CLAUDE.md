@@ -34,6 +34,19 @@ considered done:
 Do not build a separate throwaway demo per milestone — extend the one app so
 it stays a running, readable record of what the pipeline can currently do.
 
+## Keep README.md current for humans
+
+`memory/` is for cross-session AI continuity; `README.md` is the
+human-facing equivalent and must stay current too. After a milestone (or
+any change worth a commit under the Git workflow section below), update
+`README.md` so a human — not just a future Claude session — can open the
+repo and understand what this project is, what stage/milestone it's
+currently at, how to build it and run `bin/slam-inspect`, and how to read
+its output to confirm the claimed progress themselves. Treat it as the
+human-readable status report and entry point: don't let it drift out of
+sync with what the code actually does, and don't let it go stale as a bare
+title while `memory/` accumulates real content.
+
 ## Project memory (for cross-session continuity)
 
 This repo has a `memory/` directory, separate from any personal/global
