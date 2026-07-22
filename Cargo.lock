@@ -498,7 +498,17 @@ checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
 name = "slam-backend"
 version = "0.1.0"
 dependencies = [
+ "approx",
+ "image",
  "nalgebra",
+ "slam-core",
+ "slam-dataset",
+ "slam-eval",
+ "slam-frontend",
+ "slam-geometry",
+ "slam-imu",
+ "slam-optim",
+ "slam-vision",
 ]
 
 [[package]]
@@ -579,12 +589,14 @@ dependencies = [
  "clap",
  "image",
  "nalgebra",
+ "slam-backend",
  "slam-core",
  "slam-dataset",
  "slam-eval",
  "slam-frontend",
  "slam-geometry",
  "slam-imu",
+ "slam-optim",
  "slam-vision",
 ]
 

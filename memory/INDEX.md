@@ -4,6 +4,7 @@ One line per entry, newest first within each section. See `README.md` for
 what goes where.
 
 ## progress/
+- [2026-07-21-m5-sliding-window-vio-backend.md](progress/2026-07-21-m5-sliding-window-vio-backend.md) — M5 done: `slam-optim` LM+Schur solver, `slam-backend` VioPipeline (naive fixed-lag window), VIO ATE ~matches M3's VO-only on MH_01/04. 81 workspace tests.
 - [2026-07-21-m4-imu-preintegration-and-initializers.md](progress/2026-07-21-m4-imu-preintegration-and-initializers.md) — M4 done: `slam-imu` preintegration + static initializer, `slam-frontend` dynamic VI initializer, 69 workspace tests. Includes a debugging-technique writeup worth rereading before the next tricky linear-algebra bug.
 - [2026-07-20-m3-stereo-vo-checkpoint.md](progress/2026-07-20-m3-stereo-vo-checkpoint.md) — M3 done: stereo matching + `VoPipeline` in `slam-frontend`, first ATE checkpoint (11-17cm RMSE, VO-only) across all 5 MH_* sequences.
 - [2026-07-20-m2-vision-frontend-primitives.md](progress/2026-07-20-m2-vision-frontend-primitives.md) — M2 done: `slam-vision` (pyramid, grid-FAST, pyramidal LK), slam-inspect extended, 41 workspace tests, clippy clean.
@@ -12,6 +13,8 @@ what goes where.
 - [2026-07-20-stage1-plan.md](progress/2026-07-20-stage1-plan.md) — wrote `plan/STAGE1.md`, set up CLAUDE.md + this memory directory; no pipeline code yet.
 
 ## decisions/
+- [0007-m5-backend-is-naive-fixed-lag-not-marginalized.md](decisions/0007-m5-backend-is-naive-fixed-lag-not-marginalized.md) — M5's sliding window drops the oldest keyframe outright instead of marginalizing it into a prior; a documented staged-scope choice, not an oversight.
+- [0006-imu-factor-uses-numerical-jacobians.md](decisions/0006-imu-factor-uses-numerical-jacobians.md) — slam-optim's IMU factor uses central-difference numerical Jacobians instead of 18 hand-derived analytic blocks; reprojection factor still analytic.
 - [0005-dynamic-init-fixes-accel-bias-at-zero.md](decisions/0005-dynamic-init-fixes-accel-bias-at-zero.md) — M4's dynamic VI initializer fixes accel bias at zero instead of solving for it jointly; confirmed exact rank deficiency, not an oversight.
 - [0004-umeyama-ate-brought-forward-to-m3.md](decisions/0004-umeyama-ate-brought-forward-to-m3.md) — Umeyama Sim3 alignment + ATE landed in `slam-eval` at M3, not M9, since M3's own checkpoint test needs it.
 - [0003-pnp-via-dlt-plus-refinement-not-p3p-epnp.md](decisions/0003-pnp-via-dlt-plus-refinement-not-p3p-epnp.md) — M1 PnP is DLT+Gauss-Newton refine, not literal P3P/EPnP; those wait for a RANSAC consumer in M3/M4.

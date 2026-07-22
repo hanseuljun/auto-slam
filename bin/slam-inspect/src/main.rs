@@ -101,6 +101,7 @@ fn inspect_sequence(seq_dir: &Path) -> anyhow::Result<()> {
 
     let vo_keyframes = print_stereo_vo(&seq, groundtruth.as_ref());
     print_imu_initialization(&seq, &vo_keyframes);
+    print_stereo_inertial_vio(&seq, groundtruth.as_ref());
 
     println!();
     Ok(())
@@ -314,6 +315,104 @@ fn print_imu_initialization(seq: &slam_dataset::EuRocSequence, vo_keyframes: &[s
             r.gyro_bias.norm()
         ),
         None => println!("dynamic VI init: did not converge"),
+    }
+}
+
+/// Demonstrates M5 (`slam-optim` + `slam-backend`): the sliding-window
+/// stereo-inertial VIO pipeline (reprojection + IMU factors, LM with
+/// Schur-complement landmark elimination) over a real clip, reported the
+/// same way as the M3 stereo-VO-only section for direct comparison.
+fn print_stereo_inertial_vio(seq: &slam_dataset::EuRocSequence, groundtruth: Option<&slam_eval::GroundTruthTrajectory>) {
+    const NUM_FRAMES: usize = 80;
+    let num_frames = NUM_FRAMES.min(seq.cam0_frames.len());
+    if num_frames < 2 {
+        println!("stereo-inertial VIO: not enough frames to demonstrate");
+        return;
+    }
+
+    let all_gyro: Vec<nalgebra::Vector3<f64>> = seq.imu_samples.iter().map(|s| s.gyro).collect();
+    let Some(start) = slam_imu::find_stationary_window(&all_gyro, 200, 0.09) else {
+        println!("stereo-inertial VIO: no stationary window to bootstrap from, skipping");
+        return;
+    };
+    let accel: Vec<nalgebra::Vector3<f64>> = seq.imu_samples[start..start + 200].iter().map(|s| s.accel).collect();
+    let Some(static_init) = slam_imu::static_initialize(&all_gyro[start..start + 200], &accel) else {
+        println!("stereo-inertial VIO: static init failed, skipping");
+        return;
+    };
+
+    let cal = &seq.calibration;
+    let rig = slam_geometry::StereoRig {
+        t_bs_cam0: slam_core::SE3::from_matrix(&cal.cam0.t_bs),
+        t_bs_cam1: slam_core::SE3::from_matrix(&cal.cam1.t_bs),
+        cam0: slam_geometry::PinholeCamera::new(cal.cam0.intrinsics, cal.cam0.distortion_coefficients),
+        cam1: slam_geometry::PinholeCamera::new(cal.cam1.intrinsics, cal.cam1.distortion_coefficients),
+    };
+    let initial_state = slam_optim::KeyframeState::new(
+        slam_core::SE3::identity(),
+        nalgebra::Vector3::zeros(),
+        static_init.gyro_bias,
+        nalgebra::Vector3::zeros(),
+    );
+    let gravity_world = static_init.gravity_direction_body * static_init.gravity_magnitude;
+
+    let left0 = seq.load_cam0_image(0).expect("decode frame 0");
+    let right0 = seq.load_cam1_image(0).expect("decode frame 0");
+    let params = slam_backend::VioParams {
+        solver: slam_optim::SolverConfig { max_iterations: 6, ..slam_optim::SolverConfig::default() },
+        ..slam_backend::VioParams::default()
+    };
+    let mut vio = slam_backend::VioPipeline::new(rig, initial_state, seq.cam0_frames[0].timestamp_ns, gravity_world, params);
+    vio.init_map(&left0, &right0);
+
+    let mut trajectory = vec![(seq.cam0_frames[0].timestamp_ns, nalgebra::Vector3::zeros())];
+    let mut prev_timestamp = seq.cam0_frames[0].timestamp_ns;
+    let mut lost_at = None;
+    for i in 1..num_frames {
+        let left = seq.load_cam0_image(i).expect("decode frame");
+        let right = seq.load_cam1_image(i).expect("decode frame");
+        let timestamp = seq.cam0_frames[i].timestamp_ns;
+        let imu_since_last: Vec<_> = seq.imu_samples.iter().filter(|s| s.timestamp_ns > prev_timestamp && s.timestamp_ns <= timestamp).cloned().collect();
+        prev_timestamp = timestamp;
+
+        match vio.process_frame(&left, &right, timestamp, &imu_since_last) {
+            Some(result) if result.is_keyframe => {
+                trajectory.push((timestamp, result.pose_world_to_body.inverse().translation));
+            }
+            Some(_) => {}
+            None => {
+                lost_at = Some(i);
+                break;
+            }
+        }
+    }
+
+    print!(
+        "stereo-inertial VIO: {} landmarks, {} keyframes over {num_frames} frames{}",
+        vio.num_landmarks(),
+        trajectory.len(),
+        lost_at.map(|i| format!(" (lost at frame {i})")).unwrap_or_default()
+    );
+
+    match groundtruth {
+        Some(gt) => {
+            let mut aligned_estimate = Vec::new();
+            let mut aligned_groundtruth = Vec::new();
+            for (t, p) in &trajectory {
+                if let Some(pose) = gt.interpolate(*t) {
+                    aligned_estimate.push(*p);
+                    aligned_groundtruth.push(pose.position);
+                }
+            }
+            match slam_eval::compute_ate(&aligned_estimate, &aligned_groundtruth) {
+                Some(stats) => println!(
+                    ", ATE (Sim3-aligned, stereo+IMU, naive fixed-lag window) over {} keyframes: rmse={:.3}m mean={:.3}m median={:.3}m max={:.3}m",
+                    stats.num_points, stats.rmse, stats.mean, stats.median, stats.max
+                ),
+                None => println!(", not enough groundtruth-covered keyframes to compute ATE"),
+            }
+        }
+        None => println!(", no groundtruth available for ATE"),
     }
 }
 

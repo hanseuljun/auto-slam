@@ -16,11 +16,11 @@ plan, scope, and accuracy target.
 
 ## Status
 
-Stage 1 milestones M0-M4 are done (stereo visual odometry plus IMU
-preintegration/initialization; the two aren't fused into one estimator
-yet — that's M5). See [`plan/STAGE1.md`](plan/STAGE1.md) for the milestone
-list and [`memory/progress/`](memory/progress/) for a session-by-session
-log of what landed and when.
+Stage 1 milestones M0-M5 are done: stereo visual odometry, IMU
+preintegration/initialization, and — as of M5 — a sliding-window backend
+that jointly optimizes both together. See [`plan/STAGE1.md`](plan/STAGE1.md)
+for the milestone list and [`memory/progress/`](memory/progress/) for a
+session-by-session log of what landed and when.
 
 | Milestone | What it adds | Status |
 |---|---|---|
@@ -29,20 +29,25 @@ log of what landed and when.
 | M2 | Image pyramid, FAST detector, Lucas-Kanade tracking | Done |
 | M3 | Stereo matching + VO pipeline, first ATE checkpoint | Done |
 | M4 | IMU preintegration + static/dynamic VI initialization | Done |
-| M5 | Sliding-window VIO backend (fuses M3's VO with M4's IMU) | Not started |
+| M5 | Sliding-window VIO backend (fuses M3's VO with M4's IMU) | Done |
 | M6-M10 | Robustness, loop closure, global BA, evaluation harness, accuracy tuning | Not started |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
 with ATE RMSE in the 11-17cm range over ~130 real frames per sequence —
 proof the frontend produces a geometrically sane trajectory, not yet the
-SOTA VIO accuracy bar (2-9cm), which needs the IMU fusion and backend work
-in M5. As of M4, it also reports static (stationary-window) and dynamic
-(moving-start) IMU initialization per sequence: gyro bias and a gravity
-vector recovered from real IMU data, magnitude typically within a couple
-m/s² of 9.81 — a working bootstrap for M5's backend, not yet a tightly
-converged estimate (see `memory/decisions/0005-...md` for why
-accelerometer bias isn't estimated at this stage).
+SOTA VIO accuracy bar (2-9cm). As of M4, it also reports static
+(stationary-window) and dynamic (moving-start) IMU initialization per
+sequence: gyro bias and a gravity vector recovered from real IMU data,
+magnitude typically within a couple m/s² of 9.81 (see
+`memory/decisions/0005-...md` for why accelerometer bias isn't estimated
+at this stage). As of M5, it also reports full stereo-inertial VIO (joint
+reprojection + IMU optimization) on sequences with a stationary bootstrap
+window: ATE currently ~matches, not yet clearly beats, the VO-only number
+on the same clip — expected given the backend's window is still naive
+fixed-lag (no marginalization) and uses ad hoc, not covariance-derived,
+noise weights (`memory/decisions/0006-...md`, `0007-...md`); closing that
+gap is explicitly M10's job, not a sign M5 is broken.
 
 ## Building
 
@@ -81,6 +86,9 @@ above is real, not just claimed):
   gravity) if the sequence has one, and the moving-start dynamic
   vision-IMU alignment initializer (gyro bias + gravity, reusing the VO
   keyframes above) always
+- stereo-inertial VIO stats (sequences with a stationary bootstrap window
+  only): landmarks, keyframes, and ATE for the full sliding-window
+  backend — directly comparable to the stereo-VO-only ATE above
 - a raw ground-truth trajectory summary (span, bounding box) as a sanity
   check on units/frame
 

@@ -36,6 +36,7 @@ pub struct BiasRwFactorSpec {
 /// the IMU factor, real preintegration covariance propagation — deferred
 /// since M4, see `memory/decisions`) for M10's "accuracy closing pass";
 /// this scope is intentional, not an oversight.
+#[derive(Debug, Clone, Copy)]
 pub struct SolverConfig {
     pub max_iterations: usize,
     pub initial_lambda: f64,
