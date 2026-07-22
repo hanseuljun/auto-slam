@@ -8,9 +8,13 @@ one) working in this repository.
 A stereo-inertial SLAM program and reconstruction library, written in Rust,
 with the SLAM/estimation algorithms implemented from scratch (infra crates
 like `nalgebra`/`image`/`serde` are fine; no OpenCV/g2o/Ceres/existing SLAM
-crates). Current stage plan: `plan/STAGE1.md`. Read it before picking up
-work, and update it (or add `plan/STAGE2.md` etc.) when the plan itself
-changes, not just when code changes.
+crates). Current stage plan: `plan/STAGE2.md` (real-time VIO + finishing
+Stage 1's remaining milestones); `plan/STAGE1.md` is the original 11-
+milestone plan, mostly done (M0-M8) and worth reading for that history,
+but M9/M10 are now tracked inside `plan/STAGE2.md` instead. Read the
+current stage plan before picking up work, and update it (or add
+`plan/STAGE3.md` etc.) when the plan itself changes, not just when code
+changes.
 
 ## Verification: tests + a human-readable test app
 

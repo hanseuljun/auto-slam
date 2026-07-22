@@ -4,6 +4,7 @@ One line per entry, newest first within each section. See `README.md` for
 what goes where.
 
 ## progress/
+- [2026-07-21-stage2-plan.md](progress/2026-07-21-stage2-plan.md) — wrote `plan/STAGE2.md`: real-time VIO (factor <=1.0) + finishing Stage 1's M9/M10, after a rolled-back M9 attempt found global BA's dense O(n^3) solve doesn't scale (decisions/0007's unbounded history is the root cause).
 - [2026-07-21-m8-global-bundle-adjustment.md](progress/2026-07-21-m8-global-bundle-adjustment.md) — M8 done: global BA over the full retained trajectory, reusing slam-optim's Problem/optimize. ATE held (0.1366m→0.1377m) on a short loop-free MH_01 clip — expected; a real win likely needs a longer sequence and/or post-loop-closure.
 - [2026-07-21-m7-loop-closure.md](progress/2026-07-21-m7-loop-closure.md) — M7 done: BoW vocabulary + geometric verification + pose-graph optimization, real MH_05 loop verified, ATE 5.6m→3.3m. Four real bugs found and fixed, including a hidden VoPipeline corruption.
 - [2026-07-21-m6-robust-tracking-and-full-sequence-runs.md](progress/2026-07-21-m6-robust-tracking-and-full-sequence-runs.md) — M6 done: track-loss recovery (VO + IMU-propagation for VIO), LK final-residual fix, full 5-sequence run with zero unrecoverable frames across ~14,000 frames.
