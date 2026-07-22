@@ -599,7 +599,11 @@ dependencies = [
 name = "slam-optim"
 version = "0.1.0"
 dependencies = [
+ "approx",
  "nalgebra",
+ "slam-core",
+ "slam-geometry",
+ "slam-imu",
 ]
 
 [[package]]

@@ -5,3 +5,9 @@ edition.workspace = true
 
 [dependencies]
 nalgebra.workspace = true
+slam-core.workspace = true
+slam-geometry.workspace = true
+slam-imu.workspace = true
+
+[dev-dependencies]
+approx.workspace = true
