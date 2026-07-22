@@ -564,7 +564,10 @@ dependencies = [
 name = "slam-imu"
 version = "0.1.0"
 dependencies = [
+ "approx",
  "nalgebra",
+ "slam-core",
+ "slam-dataset",
 ]
 
 [[package]]

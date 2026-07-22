@@ -30,11 +30,24 @@ Each sequence (`MH_01_easy` .. `MH_05_difficult`) has `mav0/` with:
 - **Timestamps aren't trivially 1:1 across streams.** cam0/cam1/imu0/
   groundtruth all have independent timestamp columns; need real
   nearest-neighbor or interpolated lookup by timestamp, not index alignment.
-- **Sequence starts differ.** MH_01/02/03 start with the MAV stationary —
-  usable for a simple static IMU-bias/gravity initializer. MH_04/05 start
-  already in motion — need the dynamic vision-IMU alignment initializer as
-  a fallback (see `plan/STAGE1.md` M4). Don't assume the static path works
-  on all five sequences.
+- **Sequence starts differ — but "MH_01/02/03 start stationary" is *not*
+  the same as "sample 0 is stationary."** Corrected 2026-07-21: MH_01's
+  groundtruth speed at its very first covered timestamp is already ~0.8
+  m/s, and raw `imu0` gyro norms exceed 0.1 rad/s within the first couple
+  hundred samples — index 0 is mid-handling, not at rest. The actual
+  genuinely-still window (gyro norm consistently < ~0.09 rad/s, accel norm
+  ≈ 9.78) starts around **sample ~4500-5300 of `imu0`, i.e. ~22-26.5s into
+  the recording**, not at t=0. `slam_imu::find_stationary_window` scans
+  for this rather than assuming any fixed offset — don't hardcode "first N
+  samples" for a static initializer on any sequence without checking.
+  MH_04/05 are still the ones that never settle at all (need the dynamic
+  vision-IMU alignment initializer, `plan/STAGE1.md` M4's fallback path).
+- **The ADIS16448's raw (factory-uncalibrated) gyro bias is large** —
+  empirically ~0.08 rad/s (≈4.6°/s) on MH_01's z-axis, consistent across
+  multiple genuinely-stationary windows at different times in the
+  recording (so it's a real sustained bias, not noise/settling). Don't
+  assume a "near-zero" gyro bias as a sanity bound in tests or
+  initialization code; bound checks should allow for this.
 - **`data/` is gitignored.** The dataset itself is not (and should not be)
   committed — `.gitignore` at repo root contains just `data`. Any tooling
   that needs to know sequence paths should take them as arguments/config,
