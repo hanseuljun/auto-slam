@@ -1,0 +1,15 @@
+[package]
+name = "slam-render"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nalgebra.workspace = true
+wgpu.workspace = true
+winit.workspace = true
+bytemuck.workspace = true
+pollster.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+approx.workspace = true

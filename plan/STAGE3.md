@@ -123,7 +123,7 @@ tested increment, no big-bang integration at the end.
   from `docs/RESULTS.md`'s baseline. Full writeup: `memory/progress/
   2026-07-23-stage3-m0-multi-run-history.md`.
 
-### M1 — `slam-render`: rendering-library foundations
+### M1 — `slam-render`: rendering-library foundations — Done
 
 - `wgpu` context + `winit` window/event loop bootstrap; an orbit
   camera (mouse-drag orbit, scroll zoom, pan) with hand-written view/
@@ -136,6 +136,31 @@ tested increment, no big-bang integration at the end.
   to a texture, assert non-trivial pixel content) if the dev machine's
   GPU stack supports it in headless mode — flagged as a risk below since
   headless GPU access can be environment-dependent.
+- **Result**: the flagged risk turned out not to bite — confirmed via a
+  throwaway probe *before* writing any real code that this repo's dev
+  machine gets a real headless Metal adapter (`AdapterInfo { name: "Apple
+  M1", ..., backend: Metal }`) with no window/display needed, so the
+  offscreen smoke test could be a genuine GPU-backed pixel-readback
+  test, not just a "did it panic" check. Landed: `OrbitCamera` (7 unit
+  tests covering eye/view/projection math, pole-clamping, pan/zoom/orbit),
+  `GpuContext` (instance/adapter/device/queue bootstrap), `Scene` (line/
+  polyline/grid/axes primitives — polyline support pulled forward from
+  M2 since it fell out for free once lines existed), `LineRenderer` +
+  `OffscreenTarget` (a real render-to-texture-and-read-pixels-back test:
+  renders grid+axes, asserts non-background pixels exist and specifically
+  near the viewport center where the gizmo's look-at-target origin
+  projects). Also caught and fixed a real portability bug before it could
+  bite: `LineRenderer` initially hardcoded its pipeline's color format to
+  match the offscreen target, which would have panicked the first time it
+  rendered into a window surface using a different native format (common
+  on macOS, `Bgra8UnormSrgb`) — fixed by taking `color_format` as a
+  parameter instead. 14 `cargo test`s, all passing, `cargo clippy` clean.
+  A `cargo run -p slam-render --example orbit_demo` window (mouse-drag
+  orbit/pan, scroll zoom) exists for the human-verification half of this
+  milestone (see "Verifying a GUI deliverable") — built and clippy-clean,
+  but not run by the agent itself, since driving/observing a live GUI
+  window isn't something this tool has a way to do; needs the user's own
+  visual confirmation.
 
 ### M2 — Trajectory & pose-graph primitives
 

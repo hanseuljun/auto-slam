@@ -37,7 +37,9 @@ reproducible accuracy and real-time-factor numbers. Stage 3 (trajectory
 visualization — `slam-render`, a hand-written 3D rendering library, plus
 `bin/slam-viz`, an app that shows a run's trajectory next to its video
 frames and diagnostic graphs and lets users browse past runs) is
-planned but not started. See [`plan/STAGE1.md`](plan/STAGE1.md),
+underway: M0 (non-clobbering per-run output history in `bin/slam-run`)
+and M1 (`slam-render`'s camera/GPU/primitive foundations) are done — see
+below. See [`plan/STAGE1.md`](plan/STAGE1.md),
 [`plan/STAGE2.md`](plan/STAGE2.md), and [`plan/STAGE3.md`](plan/STAGE3.md)
 for the full milestone lists and [`memory/progress/`](memory/progress/)
 for a session-by-session log of what landed and when.
@@ -58,7 +60,9 @@ for a session-by-session log of what landed and when.
 | Stage 2 M2-M4 | Analytic Jacobians, sparse solve, `rayon` parallelism | Deferred — not required, real-time bar already met (see M5) |
 | Stage 2 M5 | Real-time validation (factor ≤ 1.0) | **Done — met via M1 alone** |
 | Stage 2 M6 | Accuracy closing pass (finishes Stage 1 M10) | **Done — see below** |
-| Stage 3 M0-M7 | `slam-render` (3D rendering library) + `bin/slam-viz` (visualization app, per-run browsing) | Not started — see `plan/STAGE3.md` |
+| Stage 3 M0 | Non-clobbering per-run output history in `bin/slam-run` | Done |
+| Stage 3 M1 | `slam-render` foundations (camera, GPU bootstrap, line/grid/axes primitives) | Done |
+| Stage 3 M2-M7 | Trajectory primitives, `bin/slam-viz` (3D/video/graph panels, per-run browsing) | Not started — see `plan/STAGE3.md` |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
@@ -179,6 +183,30 @@ real-time factors comfortably under 1.0: MH_01 0.151m, MH_02 0.184m,
 MH_03 0.511m, MH_04 1.174m, MH_05 0.455m — see `docs/RESULTS.md`. With
 M0-M6 all landed (M2-M4 deferred by M1's finding), both of Stage 2's
 goals — real-time VIO and finishing Stage 1 — are met.
+
+**Stage 3's M0** made `bin/slam-run` write a non-clobbering history entry
+per invocation (`runs/<sequence>/<run_id>/{trajectory.csv, meta.json}`,
+`meta.json` carrying ATE/RPE/timing plus the exact config and git commit
+used) instead of only overwriting the latest run — the prerequisite for
+goal 3 (per-run browsing) that also means every future tuning sweep
+leaves a real on-disk trace, not just a memory/commit-message summary.
+**Stage 3's M1** added the new `slam-render` crate: a hand-written orbit
+camera (mouse-drag orbit, scroll zoom, pan — `OrbitCamera` in `camera.rs`,
+its view/projection matrices unit-tested against known camera poses,
+no GPU needed), a `wgpu`/`winit` bootstrap (`GpuContext`), and line-
+segment scene primitives (`add_line`/`add_polyline`/`add_grid`/
+`add_axes`). Verified with genuine GPU-backed tests, not just math: this
+repo's development machine gets a real headless Metal adapter with no
+window needed, confirmed before writing any rendering code, so
+`slam-render`'s own tests render a grid+axes scene to an off-screen
+texture and read the actual pixels back to assert the gizmo appears
+where the camera math says it should. `cargo run -p slam-render
+--example orbit_demo` opens an interactive window (drag to orbit, scroll
+to zoom) for the human-verification half of this milestone — building
+and passing `cargo clippy` is confirmed, but actually looking at it is
+for a human, not this repo's automated checks (see `plan/STAGE3.md`'s
+"Verifying a GUI deliverable" section for why that split is the right
+bar for this stage).
 
 ## Building
 

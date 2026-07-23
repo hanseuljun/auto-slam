@@ -11,6 +11,7 @@ members = [
     "crates/slam-backend",
     "crates/slam-loopclosure",
     "crates/slam-eval",
+    "crates/slam-render",
     "bin/slam-inspect",
     "bin/slam-run",
 ]
@@ -32,6 +33,10 @@ clap = { version = "4", features = ["derive"] }
 approx = "0.5"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 serde_json = "1"
+wgpu = "0.20"
+winit = "0.29"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.3"
 
 slam-core = { path = "crates/slam-core" }
 slam-dataset = { path = "crates/slam-dataset" }
@@ -43,3 +48,4 @@ slam-frontend = { path = "crates/slam-frontend" }
 slam-backend = { path = "crates/slam-backend" }
 slam-loopclosure = { path = "crates/slam-loopclosure" }
 slam-eval = { path = "crates/slam-eval" }
+slam-render = { path = "crates/slam-render" }

@@ -4,6 +4,7 @@ One line per entry, newest first within each section. See `README.md` for
 what goes where.
 
 ## progress/
+- [2026-07-23-stage3-m1-slam-render-foundations.md](progress/2026-07-23-stage3-m1-slam-render-foundations.md) — Stage 3 M1 done: new slam-render crate (hand-written orbit camera math, wgpu/winit bootstrap, line/grid/axes primitives), verified with real headless-GPU offscreen-render pixel tests, plus a windowed orbit_demo example for human verification.
 - [2026-07-23-stage3-m0-multi-run-history.md](progress/2026-07-23-stage3-m0-multi-run-history.md) — Stage 3 M0 done: bin/slam-run writes a non-clobbering runs/<sequence>/<run_id>/{trajectory.csv,meta.json} history entry per invocation, additive to the existing latest-snapshot output — the prerequisite for goal 3's per-run browsing.
 - [2026-07-22-stage3-plan.md](progress/2026-07-22-stage3-plan.md) — wrote `plan/STAGE3.md`: trajectory visualization, three ordered goals (hand-written slam-render 3D library, bin/slam-viz app with synced 3D/video/graph panels, per-run browsing), started right after Stage 2's M6 closed.
 - [2026-07-22-stage2-m6-huber-and-window-size-tried-reverted.md](progress/2026-07-22-stage2-m6-huber-and-window-size-tried-reverted.md) — Stage 2 M6: Huber threshold (1.5/5.0 vs default 3.0) and smaller window_size (6/4 vs default 8) both measured on real data, both mixed/regressed, both reverted — M6's remaining open items now exhausted, recommending M6 done.
