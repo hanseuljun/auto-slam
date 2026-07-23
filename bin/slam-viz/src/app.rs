@@ -5,6 +5,7 @@ use slam_render::{GpuContext, LineRenderer, OffscreenTarget, OrbitCamera, Scene}
 
 use crate::runs::{discover_runs, DiscoveredRun};
 use crate::scene_load::load_run_scene;
+use crate::video::VideoPlayer;
 
 /// `bin/slam-viz`'s application state (`plan/STAGE3.md` M3): a run
 /// picker (left panel) plus a 3D trajectory view (central panel). The 3D
@@ -28,19 +29,21 @@ pub struct App {
     renderer: LineRenderer,
     scene: Scene,
     camera: OrbitCamera,
+    video: VideoPlayer,
 }
 
 impl App {
-    pub fn new(runs_dir: PathBuf) -> Self {
+    pub fn new(runs_dir: PathBuf, data_dir: PathBuf) -> Self {
         let gpu = GpuContext::new().expect("slam-viz requires a GPU adapter to render the 3D panel");
         let offscreen = OffscreenTarget::new(&gpu, 640, 480);
         let renderer = LineRenderer::new(&gpu, slam_render::OFFSCREEN_COLOR_FORMAT);
         let camera = OrbitCamera::new(Point3::origin(), 10.0, 640.0 / 480.0);
+        let video = VideoPlayer::new(data_dir);
 
-        let mut app = App { runs_dir, runs: Vec::new(), selected_dir: None, error: None, gpu, offscreen, renderer, scene: Scene::new(), camera };
+        let mut app = App { runs_dir, runs: Vec::new(), selected_dir: None, error: None, gpu, offscreen, renderer, scene: Scene::new(), camera, video };
         app.refresh_runs();
         if let Some(first) = app.runs.first().cloned() {
-            app.select_run(first.dir);
+            app.select_run(&first);
         } else {
             app.scene.add_grid(10.0, 10, [0.3, 0.3, 0.3]);
             app.scene.add_axes(2.0);
@@ -52,17 +55,18 @@ impl App {
         self.runs = discover_runs(&self.runs_dir);
     }
 
-    fn select_run(&mut self, dir: PathBuf) {
-        match load_run_scene(&dir) {
+    fn select_run(&mut self, run: &DiscoveredRun) {
+        match load_run_scene(&run.dir) {
             Ok(loaded) => {
+                self.video.load_for_run(&run.meta.sequence_name, loaded.timestamps.clone());
                 self.scene = loaded.scene;
                 self.camera.target = loaded.center;
                 self.camera.distance = (loaded.extent * 1.5).max(1.0);
-                self.selected_dir = Some(dir);
+                self.selected_dir = Some(run.dir.clone());
                 self.error = None;
             }
             Err(e) => {
-                self.error = Some(format!("failed to load {}: {e}", dir.display()));
+                self.error = Some(format!("failed to load {}: {e}", run.dir.display()));
             }
         }
     }
@@ -77,18 +81,18 @@ impl App {
             ui.label(format!("No runs found under {}", self.runs_dir.display()));
             ui.label("Run `cargo run --release --bin slam-run` first.");
         }
-        let mut clicked_dir = None;
+        let mut clicked: Option<DiscoveredRun> = None;
         egui::ScrollArea::vertical().show(ui, |ui| {
             for run in &self.runs {
                 let selected = self.selected_dir.as_deref() == Some(run.dir.as_path());
                 let label = format!("{}\n{}\nATE rmse {:.3}m, RT factor {}", run.meta.sequence_name, run.meta.run_id, run.meta.ate.rmse, run.meta.timing.map(|t| format!("{:.3}", t.real_time_factor())).unwrap_or_else(|| "n/a".to_string()));
                 if ui.selectable_label(selected, label).clicked() {
-                    clicked_dir = Some(run.dir.clone());
+                    clicked = Some(run.clone());
                 }
             }
         });
-        if let Some(dir) = clicked_dir {
-            self.select_run(dir);
+        if let Some(run) = clicked {
+            self.select_run(&run);
         }
         if let Some(err) = &self.error {
             ui.separator();
@@ -128,6 +132,7 @@ impl App {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::SidePanel::left("run_picker").min_width(240.0).show(ctx, |ui| self.run_picker(ui));
+        egui::SidePanel::right("video_panel").min_width(320.0).show(ctx, |ui| self.video.ui(ui));
         egui::CentralPanel::default().show(ctx, |ui| self.trajectory_view(ui));
     }
 }

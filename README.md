@@ -64,7 +64,8 @@ for a session-by-session log of what landed and when.
 | Stage 3 M1 | `slam-render` foundations (camera, GPU bootstrap, line/grid/axes primitives) | Done |
 | Stage 3 M2 | Trajectory/pose-graph scene primitives (point/pose markers) | Done |
 | Stage 3 M3 | `bin/slam-viz` app shell + 3D panel, run picker | Done |
-| Stage 3 M4-M7 | Video/graph panels, synced playback, run-browser polish | Not started — see `plan/STAGE3.md` |
+| Stage 3 M4 | Video frame panel, synced to keyframe timestamps | Done |
+| Stage 3 M5-M7 | Graphs panel, synced playback, run-browser polish | Not started — see `plan/STAGE3.md` |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
@@ -240,6 +241,16 @@ end-to-end verification against real pipeline output, not just
 synthetic test fixtures. `cargo run --release --bin slam-viz` opens the
 interactive app (drag-orbit/pan, scroll-zoom, click a run in the left
 panel) for the same human-verification step M1's demo needs.
+
+**Stage 3's M4** added `bin/slam-viz`'s video panel: a scrub slider over
+the selected run's own keyframe timestamps, each position synced to the
+matching `cam0` frame via a new `slam_dataset::EuRocSequence::
+nearest_cam0_frame_index` (binary search — didn't exist before this
+milestone, despite the plan's text assuming it did) and displayed as an
+`egui` texture, with play/pause at a fixed ~10 keyframes/sec. Verified
+against the real `MH_01_easy` dataset already in this repo, not just
+synthetic fixtures: loading a real sequence and syncing to a real
+frame's own timestamp resolves back to the exact expected index.
 
 ## Building
 

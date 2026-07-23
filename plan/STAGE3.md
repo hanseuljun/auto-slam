@@ -243,7 +243,7 @@ tested increment, no big-bang integration at the end.
   `orbit_demo` — needs the user's own visual confirmation via `cargo run
   --release --bin slam-viz`.
 
-### M4 — Video frame panel
+### M4 — Video frame panel — Done
 
 - Displays `cam0` (and optionally `cam1`) frames from `slam-dataset`,
   synced to a playback time/frame index, with a scrub bar and play/
@@ -253,6 +253,27 @@ tested increment, no big-bang integration at the end.
 - Test: unit tests for time → frame-index lookup against real dataset
   timestamps; manual confirmation that scrubbing shows the correct
   frame.
+- **Result**: the plan's premise ("reuses `slam-dataset`'s existing
+  ... lookup") turned out to be slightly ahead of the code — no such
+  lookup existed yet, so this milestone added
+  `EuRocSequence::nearest_cam0_frame_index` (binary search over
+  `cam0_frames`, which `load` already guarantees is timestamp-sorted)
+  to `slam-dataset` itself, the right crate to own it. `bin/slam-viz`
+  gained a `VideoPlayer` (right-side panel): a scrub slider over the
+  selected run's own keyframe timestamps (not raw `cam0` indices — a
+  run's keyframes are already the natural scrubbing granularity),
+  play/pause at a fixed ~10 keyframes/sec, and a decoded `cam0` frame
+  (grayscale replicated to RGBA) displayed as an `egui` texture, synced
+  via the new lookup. 4 new `slam-dataset` tests (exact match, between-
+  two-frames tie-breaking, before-first/after-last clamping, single-
+  frame edge case) plus 2 new `bin/slam-viz` tests exercising
+  `VideoPlayer::load_for_run`/sync against the *real* `MH_01_easy`
+  dataset already in this repo (load succeeds, syncs to the exact
+  expected frame index; a nonexistent sequence sets an error, not a
+  panic) — real-data verification, not synthetic fixtures alone, same
+  bar M0-M3 held to. `cargo clippy --workspace` clean. Windowed
+  play/scrub itself not run by the agent, same reasoning as every
+  prior milestone's interactive half.
 
 ### M5 — Graphs panel
 

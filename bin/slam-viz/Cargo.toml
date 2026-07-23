@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 slam-core.workspace = true
+slam-dataset.workspace = true
 slam-eval.workspace = true
 slam-render.workspace = true
 nalgebra.workspace = true

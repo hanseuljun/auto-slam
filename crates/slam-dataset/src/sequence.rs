@@ -119,8 +119,82 @@ impl EuRocSequence {
     pub fn events(&self) -> EventStream<'_> {
         EventStream::new(&self.imu_samples, &self.cam0_frames, &self.cam1_frames)
     }
+
+    /// The `cam0_frames` index whose timestamp is closest to `timestamp_ns`
+    /// — the "playback time -> frame index" sync `bin/slam-viz`'s video
+    /// panel needs (`plan/STAGE3.md` M4), kept here rather than
+    /// reimplemented per-consumer since `cam0_frames` being sorted by
+    /// timestamp (enforced in `load`) is exactly what makes a binary
+    /// search correct.
+    pub fn nearest_cam0_frame_index(&self, timestamp_ns: u64) -> usize {
+        nearest_frame_index(&self.cam0_frames, timestamp_ns)
+    }
 }
 
 fn is_sorted_by_timestamp(frames: &[CameraFrame]) -> bool {
     frames.windows(2).all(|w| w[0].timestamp_ns <= w[1].timestamp_ns)
+}
+
+/// Index of the frame in `frames` (assumed sorted by `timestamp_ns`,
+/// ascending) whose timestamp is closest to `timestamp_ns`. `frames` must
+/// be non-empty — callers already only reach this with a loaded
+/// sequence's `cam0_frames`, which `EuRocSequence::load` guarantees is
+/// both sorted and (per every real EuRoC sequence) non-empty.
+fn nearest_frame_index(frames: &[CameraFrame], timestamp_ns: u64) -> usize {
+    match frames.binary_search_by_key(&timestamp_ns, |f| f.timestamp_ns) {
+        Ok(exact) => exact,
+        Err(insert_at) => {
+            if insert_at == 0 {
+                0
+            } else if insert_at >= frames.len() {
+                frames.len() - 1
+            } else {
+                let before = insert_at - 1;
+                let after = insert_at;
+                let dist_before = timestamp_ns.abs_diff(frames[before].timestamp_ns);
+                let dist_after = frames[after].timestamp_ns.abs_diff(timestamp_ns);
+                if dist_before <= dist_after {
+                    before
+                } else {
+                    after
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod nearest_frame_tests {
+    use super::*;
+
+    fn frames(timestamps: &[u64]) -> Vec<CameraFrame> {
+        timestamps.iter().map(|&t| CameraFrame { timestamp_ns: t, filename: format!("{t}.png") }).collect()
+    }
+
+    #[test]
+    fn exact_timestamp_match_returns_that_index() {
+        let f = frames(&[100, 200, 300]);
+        assert_eq!(nearest_frame_index(&f, 200), 1);
+    }
+
+    #[test]
+    fn between_two_frames_picks_the_closer_one() {
+        let f = frames(&[100, 200, 300]);
+        assert_eq!(nearest_frame_index(&f, 140), 0);
+        assert_eq!(nearest_frame_index(&f, 160), 1);
+    }
+
+    #[test]
+    fn before_first_or_after_last_clamps_to_the_nearest_end() {
+        let f = frames(&[100, 200, 300]);
+        assert_eq!(nearest_frame_index(&f, 0), 0);
+        assert_eq!(nearest_frame_index(&f, 10_000), 2);
+    }
+
+    #[test]
+    fn single_frame_always_returns_index_zero() {
+        let f = frames(&[500]);
+        assert_eq!(nearest_frame_index(&f, 0), 0);
+        assert_eq!(nearest_frame_index(&f, 999_999), 0);
+    }
 }

@@ -15,6 +15,10 @@ pub struct LoadedTrajectory {
     pub scene: Scene,
     pub center: Point3<f64>,
     pub extent: f64,
+    /// Per-keyframe timestamps, same order as the trajectory's own
+    /// points — the video panel's playback index space (`plan/
+    /// STAGE3.md` M4).
+    pub timestamps: Vec<u64>,
 }
 
 /// The actual "data adapter" `plan/STAGE3.md` M2 originally scoped
@@ -49,7 +53,7 @@ pub fn load_run_scene(run_dir: &Path) -> anyhow::Result<LoadedTrajectory> {
         scene.add_pose_marker(&SE3::new(SO3::identity(), estimated[i].coords), marker_scale, [0.8, 0.8, 0.8]);
     }
 
-    Ok(LoadedTrajectory { scene, center, extent })
+    Ok(LoadedTrajectory { scene, center, extent, timestamps: points.timestamps })
 }
 
 /// Axis-aligned bounding box center + diagonal extent, used to frame the
@@ -105,6 +109,8 @@ mod tests {
         // every unrelated tuning of grid density or marker stride.
         let min_expected_polyline_vertices = 2 * (n - 1) * 2;
         assert!(loaded.scene.vertices.len() >= min_expected_polyline_vertices, "expected at least {} vertices from the two polylines alone, got {}", min_expected_polyline_vertices, loaded.scene.vertices.len());
+
+        assert_eq!(loaded.timestamps, timestamps, "loaded timestamps must match trajectory.csv's own timestamp column, for the video panel's playback sync (plan/STAGE3.md M4)");
 
         std::fs::remove_dir_all(&dir).ok();
     }

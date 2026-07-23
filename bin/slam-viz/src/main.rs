@@ -5,6 +5,7 @@
 mod app;
 mod runs;
 mod scene_load;
+mod video;
 
 use std::path::PathBuf;
 
@@ -17,6 +18,13 @@ struct Cli {
     /// `runs/<sequence>/<run_id>/` layout, written by `bin/slam-run`).
     #[arg(long, default_value = "runs")]
     runs_dir: PathBuf,
+
+    /// Directory containing the raw EuRoC sequences (each
+    /// `<data_dir>/<sequence_name>/mav0/`), for the video panel
+    /// (`plan/STAGE3.md` M4) — same default `bin/slam-run`/`bin/
+    /// slam-inspect` already use.
+    #[arg(long, default_value = "data/machine_hall")]
+    data_dir: PathBuf,
 
     /// Skip opening a window: discover runs, load the most recent one's
     /// scene, print counts, and exit. A fast, scriptable smoke check for
@@ -36,8 +44,8 @@ fn main() -> anyhow::Result<()> {
         return dump_scene_stats(&cli.runs_dir);
     }
 
-    let runs_dir = cli.runs_dir;
-    eframe::run_native("slam-viz", eframe::NativeOptions::default(), Box::new(move |_cc| Box::new(app::App::new(runs_dir)))).map_err(|e| anyhow::anyhow!("eframe error: {e}"))
+    let (runs_dir, data_dir) = (cli.runs_dir, cli.data_dir);
+    eframe::run_native("slam-viz", eframe::NativeOptions::default(), Box::new(move |_cc| Box::new(app::App::new(runs_dir, data_dir)))).map_err(|e| anyhow::anyhow!("eframe error: {e}"))
 }
 
 fn dump_scene_stats(runs_dir: &std::path::Path) -> anyhow::Result<()> {
