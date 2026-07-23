@@ -162,7 +162,7 @@ tested increment, no big-bang integration at the end.
   window isn't something this tool has a way to do; needs the user's own
   visual confirmation.
 
-### M2 — Trajectory & pose-graph primitives
+### M2 — Trajectory & pose-graph primitives — Done
 
 - Extend `slam-render` with the actual drawing primitives this stage
   needs: 3D polylines (estimated trajectory, ground truth, distinct
@@ -177,6 +177,34 @@ tested increment, no big-bang integration at the end.
   this milestone's human-verification step — see "Verifying a GUI
   deliverable" below for why that's the right bar here, not a plain-text
   substitute.
+- **Result**: `add_polyline` had already landed in M1 (fell out for
+  free once single-line-segment support existed). This milestone added
+  `Scene::add_point_marker`/`add_point_markers` (a crosshair stand-in
+  for "a point" — `LineList`-only rendering has no dedicated point-
+  sprite pipeline, deliberately out of scope) and `Scene::add_pose_marker`
+  (local axes + a small pyramid wireframe at an `SE3` pose, via
+  `slam-core::SE3::transform` — the concrete reason `slam-render` takes
+  `slam-core` as a dependency, per its own workspace-layout note). On
+  the "data adapter" half, refined the plan's original framing slightly
+  based on the crate-dependency boundary the plan itself set (`slam-
+  render` depends on `slam-core` only, not `slam-eval`/`slam-dataset`):
+  rather than a CSV-parsing adapter living inside `slam-render`, added
+  `slam_eval::read_trajectory_csv` (the exact inverse of the existing
+  `write_trajectory_csv`, round-trip tested) so a *consumer* that already
+  depends on both crates can convert one into the other with one line —
+  that consumer is `bin/slam-viz` (M3), which is where "load a real
+  run's `trajectory.csv` and feed it into a `Scene`" now actually lands,
+  since M3 is the first point in this stage's dependency graph where
+  both crates meet. `slam-render`'s own tests instead exercise the new
+  primitives with synthetic data (a spiral polyline + pose/point
+  markers, rendered off-screen and confirmed non-background, same
+  pixel-readback technique as M1) — real end-to-end "load and render an
+  actual run" visual confirmation is M3's `bin/slam-viz`, not this
+  milestone's `orbit_demo` example (which got the same synthetic
+  trajectory added to it for now). 5 new tests (2 point-marker, 2 pose-
+  marker, 1 GPU offscreen render combining both) plus 1 new `slam-eval`
+  test (`read_trajectory_csv` round trip) — `slam-render` 14 -> 19,
+  `slam-eval` 19 -> 20. `cargo clippy --workspace` clean throughout.
 
 ### M3 — `bin/slam-viz`: application shell + 3D panel
 

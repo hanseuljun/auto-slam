@@ -237,6 +237,7 @@ mod tests {
     use super::*;
     use crate::camera::OrbitCamera;
     use nalgebra::Point3;
+    use slam_core::{SE3, SO3};
 
     #[test]
     fn offscreen_render_of_grid_and_axes_produces_non_background_pixels() {
@@ -289,5 +290,34 @@ mod tests {
         let pixels = target.read_pixels_rgba8(&gpu);
         // 0.2 in linear Rgba8Unorm -> ~51/255.
         assert!(pixels.chunks_exact(4).all(|p| (p[0] as i32 - 51).abs() <= 2), "empty scene should render as a uniform clear color");
+    }
+
+    #[test]
+    fn offscreen_render_of_a_trajectory_with_pose_and_point_markers_produces_non_background_pixels() {
+        // A synthetic stand-in for what `bin/slam-viz` (`plan/STAGE3.md`
+        // M3) will build from a real run's `trajectory.csv` (read via
+        // `slam_eval::read_trajectory_csv`) plus a few keyframe poses and
+        // landmark points — `slam-render` itself stays decoupled from
+        // `slam-eval` (see `plan/STAGE3.md`'s workspace layout), so this
+        // test exercises the same `Scene` primitives with local data
+        // instead of a real CSV round trip.
+        let gpu = GpuContext::new().expect("GPU context required for this test");
+        let target = OffscreenTarget::new(&gpu, 256, 256);
+        let renderer = LineRenderer::new(&gpu, OFFSCREEN_COLOR_FORMAT);
+
+        let mut scene = Scene::new();
+        let trajectory: Vec<Point3<f64>> = (0..20).map(|i| Point3::new(i as f64 * 0.3, (i as f64 * 0.4).sin(), 0.0)).collect();
+        scene.add_polyline(&trajectory, [1.0, 0.6, 0.0]);
+        scene.add_pose_marker(&SE3::new(SO3::identity(), trajectory[0].coords), 0.6, [0.8, 0.8, 0.8]);
+        scene.add_pose_marker(&SE3::new(SO3::identity(), trajectory[19].coords), 0.6, [0.8, 0.8, 0.8]);
+        scene.add_point_markers(&[Point3::new(1.0, 1.0, 0.5), Point3::new(-1.0, 0.5, -0.5)], 0.15, [0.2, 1.0, 0.2]);
+
+        let center = trajectory[10];
+        let camera = OrbitCamera::new(center, 8.0, target.width as f64 / target.height as f64);
+        renderer.render(&gpu, &scene, &camera.view_projection_matrix(), target.color_view(), target.depth_view(), wgpu::Color::BLACK);
+
+        let pixels = target.read_pixels_rgba8(&gpu);
+        let non_background = pixels.chunks_exact(4).filter(|p| p[0] > 10 || p[1] > 10 || p[2] > 10).count();
+        assert!(non_background > 0, "expected the trajectory polyline + pose/point markers to render visibly, got an all-background image");
     }
 }

@@ -1,21 +1,24 @@
-//! Interactive human-verification demo for `plan/STAGE3.md` M1: a window
-//! showing the ground-plane grid + coordinate-axes gizmo, controllable
-//! with an orbit camera. This is the part of M1 that genuinely needs a
-//! person looking at it (`slam-render`'s own `cargo test` already covers
-//! everything checkable without eyes — camera math, offscreen render
-//! pixel content) — see `plan/STAGE3.md`'s "Verifying a GUI deliverable"
-//! section for why that split is the right bar for this stage, not a
-//! gap in test coverage.
+//! Interactive human-verification demo for `plan/STAGE3.md` M1/M2: a
+//! window showing the ground-plane grid + coordinate-axes gizmo, a
+//! synthetic trajectory with keyframe pose markers, and a couple of
+//! landmark point markers, controllable with an orbit camera. This is
+//! the part of M1/M2 that genuinely needs a person looking at it
+//! (`slam-render`'s own `cargo test` already covers everything checkable
+//! without eyes — camera math, offscreen render pixel content) — see
+//! `plan/STAGE3.md`'s "Verifying a GUI deliverable" section for why that
+//! split is the right bar for this stage, not a gap in test coverage.
 //!
 //! Run with `cargo run -p slam-render --example orbit_demo`.
 //!
 //! Controls: left-drag to orbit, right-drag to pan, scroll to zoom.
-//! What to look for: a gray ground-plane grid in the `XZ` plane, and a
-//! red/green/blue `X`/`Y`/`Z` axes gizmo at the origin, both rotating
-//! smoothly around the origin as you drag, panning under right-drag, and
-//! scaling under scroll — with no flicker, tearing, or NaN-driven
-//! blowups at extreme angles (in particular, drag all the way up/down to
-//! confirm the near-the-pole pitch clamp doesn't glitch).
+//! What to look for: a gray ground-plane grid in the `XZ` plane, a red/
+//! green/blue `X`/`Y`/`Z` axes gizmo at the origin, an orange spiral
+//! trajectory with gray camera-pose markers (small pyramids with local
+//! axes) along it, and a few green crosshair landmark markers — all
+//! rotating smoothly around the origin as you drag, panning under
+//! right-drag, and scaling under scroll, with no flicker, tearing, or
+//! NaN-driven blowups at extreme angles (in particular, drag all the way
+//! up/down to confirm the near-the-pole pitch clamp doesn't glitch).
 
 use std::sync::Arc;
 
@@ -53,6 +56,21 @@ fn main() -> anyhow::Result<()> {
     let mut scene = Scene::new();
     scene.add_grid(10.0, 10, [0.35, 0.35, 0.35]);
     scene.add_axes(3.0);
+
+    // A synthetic trajectory + a handful of keyframe pose markers + a
+    // couple of landmark point markers, standing in for what `bin/
+    // slam-viz` (`plan/STAGE3.md` M3) will load from a real run's
+    // `trajectory.csv` — `slam-render` itself has no dependency on
+    // `slam-eval`'s CSV format, so this demo can't load a real run.
+    let trajectory: Vec<Point3<f64>> = (0..60).map(|i| {
+        let t = i as f64 * 0.15;
+        Point3::new(t.cos() * 4.0, (i as f64 * 0.1).sin() * 0.5, t.sin() * 4.0)
+    }).collect();
+    scene.add_polyline(&trajectory, [1.0, 0.6, 0.0]);
+    for i in (0..trajectory.len()).step_by(10) {
+        scene.add_pose_marker(&slam_core::SE3::new(slam_core::SO3::identity(), trajectory[i].coords), 0.5, [0.8, 0.8, 0.8]);
+    }
+    scene.add_point_markers(&[Point3::new(2.0, 0.3, 1.0), Point3::new(-1.5, -0.2, 2.5), Point3::new(0.5, 0.8, -2.0)], 0.15, [0.2, 1.0, 0.2]);
 
     let mut camera = OrbitCamera::new(Point3::origin(), 15.0, config.width as f64 / config.height as f64);
 

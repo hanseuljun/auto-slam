@@ -16,7 +16,7 @@ use std::path::Path;
 use nalgebra::{UnitQuaternion, Vector3};
 
 pub use align::{compute_ate, umeyama_alignment, AteStats, Sim3Alignment};
-pub use report::{build_report, write_summary_csv, write_trajectory_csv, TrajectoryReport};
+pub use report::{build_report, read_trajectory_csv, write_summary_csv, write_trajectory_csv, TrajectoryPoints, TrajectoryReport};
 pub use rpe::{compute_rpe, RpeStats};
 pub use run_meta::{current_git_commit, generate_run_id, read_run_meta, write_run_meta, RunConfig, RunMeta};
 pub use timing::TimingBreakdown;

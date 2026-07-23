@@ -56,6 +56,32 @@ pub fn write_trajectory_csv(path: impl AsRef<Path>, timestamps: &[u64], estimate
     Ok(())
 }
 
+/// The parsed contents of a `trajectory.csv` written by
+/// `write_trajectory_csv` — what `bin/slam-viz`'s 3D panel (`plan/
+/// STAGE3.md` M2) reads a run's trajectory back through, instead of a
+/// second, parallel CSV parser living in `slam-render`.
+#[derive(Debug, Clone, Default)]
+pub struct TrajectoryPoints {
+    pub timestamps: Vec<u64>,
+    pub estimated: Vec<Vector3<f64>>,
+    pub groundtruth: Vec<Vector3<f64>>,
+}
+
+/// Reads back a `trajectory.csv` written by `write_trajectory_csv` — the
+/// exact inverse, field for field.
+pub fn read_trajectory_csv(path: impl AsRef<Path>) -> anyhow::Result<TrajectoryPoints> {
+    let mut reader = csv::ReaderBuilder::new().has_headers(true).from_path(path)?;
+    let mut points = TrajectoryPoints::default();
+    for record in reader.records() {
+        let record = record?;
+        let field = |i: usize| -> anyhow::Result<f64> { Ok(record.get(i).unwrap().trim().parse()?) };
+        points.timestamps.push(record.get(0).unwrap().trim().parse::<u64>()?);
+        points.estimated.push(Vector3::new(field(1)?, field(2)?, field(3)?));
+        points.groundtruth.push(Vector3::new(field(4)?, field(5)?, field(6)?));
+    }
+    Ok(points)
+}
+
 /// Writes one summary row per sequence's `TrajectoryReport` (ATE, every
 /// RPE delta present in the *first* report — assumed consistent across all
 /// reports passed in — and timing/real-time-factor columns when present)
@@ -124,7 +150,7 @@ mod tests {
     }
 
     #[test]
-    fn writes_and_reads_back_trajectory_csv() {
+    fn writes_trajectory_csv_with_expected_header_and_row_count() {
         let dir = std::env::temp_dir().join(format!("slam-eval-test-{}", std::process::id()));
         let path = dir.join("trajectory.csv");
         let timestamps = vec![100u64, 200, 300];
@@ -135,6 +161,26 @@ mod tests {
         let contents = std::fs::read_to_string(&path).expect("read back");
         assert_eq!(contents.lines().count(), 4); // header + 3 rows
         assert!(contents.contains("timestamp_ns,est_x"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_trajectory_csv_round_trips_write_trajectory_csv() {
+        let dir = std::env::temp_dir().join(format!("slam-eval-test-roundtrip-{}", std::process::id()));
+        let path = dir.join("trajectory.csv");
+        let timestamps = vec![100u64, 200, 300];
+        let estimated = vec![Vector3::new(0.0, 0.1, -0.2), Vector3::new(1.5, 0.0, 3.3), Vector3::new(2.0, -1.0, 0.0)];
+        let groundtruth = vec![Vector3::new(0.1, 0.0, 0.0), Vector3::new(1.1, 0.0, 0.0), Vector3::new(2.1, 0.0, 0.0)];
+        write_trajectory_csv(&path, &timestamps, &estimated, &groundtruth).expect("write should succeed");
+
+        let points = read_trajectory_csv(&path).expect("read should succeed");
+        assert_eq!(points.timestamps, timestamps);
+        for (a, b) in points.estimated.iter().zip(estimated.iter()) {
+            assert!((a - b).norm() < 1e-9);
+        }
+        for (a, b) in points.groundtruth.iter().zip(groundtruth.iter()) {
+            assert!((a - b).norm() < 1e-9);
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 

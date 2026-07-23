@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 nalgebra.workspace = true
+slam-core.workspace = true
 wgpu.workspace = true
 winit.workspace = true
 bytemuck.workspace = true
