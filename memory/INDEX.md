@@ -4,6 +4,7 @@ One line per entry, newest first within each section. See `README.md` for
 what goes where.
 
 ## progress/
+- [2026-07-23-stage4-m0-mh01-full-sequence-measured.md](progress/2026-07-23-stage4-m0-mh01-full-sequence-measured.md) — Stage 4 M0 (in progress): MH_01_easy full-sequence measured (ATE 3.869m, global_ba=957s). Confirms the global-BA dense-solve bottleneck via live profiling, plus two new findings: real_time_factor() doesn't count global BA's now-dominant cost, and ATE regresses 25x, more than drift-over-time alone should explain.
 - [2026-07-23-stage4-plan.md](progress/2026-07-23-stage4-plan.md) — wrote plan/STAGE4.md: full-sequence real-time VIO, motivated by a gap plan/STAGE2.md's own Risks section predicted and never closed. Found a concrete code-level lead: global_bundle_adjustment still solves densely over unbounded history.
 - [2026-07-23-stage3-m7-run-browser-polish-stage-complete.md](progress/2026-07-23-stage3-m7-run-browser-polish-stage-complete.md) — Stage 3 M7 done (core; stretch deferred): run picker now shows window_size/huber_delta. M0-M7 landed — all three of Stage 3's goals met, stage complete.
 - [2026-07-23-stage3-m6-synced-playback.md](progress/2026-07-23-stage3-m6-synced-playback.md) — Stage 3 M6 done: one shared cursor (video panel's scrub_index) drives a 3D highlight marker and a graphs-panel VLine; mostly wiring since the three panels' data already shared the same index space by construction.

@@ -102,6 +102,43 @@ changing the default, no milestone closes on an assumed number.
   alongside the existing bounded-clip one, with the same honesty
   standard — real measured numbers, or an explicit documented stall,
   never an assumed/extrapolated one.
+- **Partial result (`MH_01_easy` measured, 4 sequences remaining)**:
+  `3682 frames, 741 keyframes, ATE rmse=3.869m` (bounded clip: 0.151m),
+  `vision=102.6s optimization=23.7s global_ba=957.2s` (data=184.0s),
+  `real_time_factor()=0.686`. Confirmed the "What we already know"
+  hypothesis by live-profiling the running process (macOS `sample`):
+  100% of sampled stack frames were inside `global_bundle_adjustment`'s
+  dense LU solve. Two things this run surfaced that the original
+  hypothesis didn't fully anticipate, both real enough to change how
+  M1/M2 are scoped:
+  1. **`real_time_factor()` doesn't see global BA's cost** — it's
+     defined as `(vision+optimization)/data_seconds` by design (`plan/
+     STAGE2.md`'s own scope note, correct when global BA cost ~3s).
+     Here it reports 0.686 (looks real-time) while total wall-clock was
+     1083.45s against 184.0s of data — a true end-to-end factor of
+     ~5.9x. Goal 2 ("meet the real-time criteria while running all
+     frames") needs a metric that actually reflects this, or it'll
+     "pass" on a number that doesn't mean what it used to. M1 should
+     either fix global BA's cost until it's back to not mattering for
+     this metric's original scoping to be valid again, or `docs/
+     RESULTS.md`/the harness should report total wall-clock
+     explicitly alongside the existing per-frame-loop number so this
+     can't happen silently again.
+  2. **ATE regressed 25x (0.151m -> 3.869m) for only ~6x more duration**
+     — not obviously explainable by "longer runs drift more" alone
+     (RPE at delta=1 stayed close to the bounded clip's own rate, and
+     against published SOTA this went from ~4x worse to ~100x worse).
+     This harness doesn't chain in loop closure by design, which
+     predicts *some* extra drift, but not necessarily this much — M2
+     needs to actually investigate, not assume "no loop closure"
+     covers it.
+  Full writeup: `memory/progress/2026-07-23-stage4-m0-mh01-full-
+  sequence-measured.md`. Remaining 4 sequences not yet measured — each
+  full run currently costs ~15-20 minutes wall-clock at this
+  bottleneck's current (unfixed) cost, so finishing M0's full scope
+  serially is expensive; open question (see that memory file) whether
+  to measure all 5 before starting M1's fix, or fix first and
+  re-measure all 5 once, not twice.
 
 ### M1 — Root-cause and fix the real-time gap (if M0 confirms one)
 
