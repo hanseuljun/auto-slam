@@ -4,6 +4,7 @@ One line per entry, newest first within each section. See `README.md` for
 what goes where.
 
 ## progress/
+- [2026-07-23-stage3-m5-graphs-panel.md](progress/2026-07-23-stage3-m5-graphs-panel.md) — Stage 3 M5 done: bin/slam-viz gained a graphs panel (per-keyframe ATE + timing bar chart) backed by new slam_eval::compute_ate_series; RPE-over-time deliberately scoped out and recorded, not silently dropped.
 - [2026-07-23-stage3-m4-video-panel.md](progress/2026-07-23-stage3-m4-video-panel.md) — Stage 3 M4 done: bin/slam-viz gained a video panel synced via new slam_dataset::nearest_cam0_frame_index, verified against the real MH_01_easy dataset already in this repo.
 - [2026-07-23-stage3-m3-slam-viz-app-shell.md](progress/2026-07-23-stage3-m3-slam-viz-app-shell.md) — Stage 3 M3 done: new bin/slam-viz app (egui run picker + offscreen-rendered 3D panel), verified end-to-end against this session's own real runs/ history via a --dump-scene-stats flag.
 - [2026-07-23-stage3-m2-trajectory-pose-primitives.md](progress/2026-07-23-stage3-m2-trajectory-pose-primitives.md) — Stage 3 M2 done: slam-render gained point/pose-marker primitives; the CSV-reading half of the data adapter landed in slam-eval (read_trajectory_csv), deliberately not inside slam-render, per the plan's own crate-dependency boundary.

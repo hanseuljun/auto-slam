@@ -3,6 +3,7 @@
 //! next to a 3D trajectory view built on `slam-render` (goal 1).
 
 mod app;
+mod graphs;
 mod runs;
 mod scene_load;
 mod video;
@@ -61,14 +62,15 @@ fn dump_scene_stats(runs_dir: &std::path::Path) -> anyhow::Result<()> {
     };
     let loaded = scene_load::load_run_scene(&latest.dir)?;
     println!(
-        "loaded scene for {} / {}: {} vertices, center=({:.2}, {:.2}, {:.2}), extent={:.2}",
+        "loaded scene for {} / {}: {} vertices, center=({:.2}, {:.2}, {:.2}), extent={:.2}, {} ATE-series points",
         latest.meta.sequence_name,
         latest.meta.run_id,
         loaded.scene.vertices.len(),
         loaded.center.x,
         loaded.center.y,
         loaded.center.z,
-        loaded.extent
+        loaded.extent,
+        loaded.ate_series.len(),
     );
     Ok(())
 }

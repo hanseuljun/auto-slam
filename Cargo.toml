@@ -40,6 +40,7 @@ bytemuck = { version = "1", features = ["derive"] }
 pollster = "0.3"
 eframe = "0.27"
 egui = "0.27"
+egui_plot = "0.27"
 
 slam-core = { path = "crates/slam-core" }
 slam-dataset = { path = "crates/slam-dataset" }

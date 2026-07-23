@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use nalgebra::Point3;
 use slam_render::{GpuContext, LineRenderer, OffscreenTarget, OrbitCamera, Scene};
 
+use crate::graphs::GraphsPanel;
 use crate::runs::{discover_runs, DiscoveredRun};
 use crate::scene_load::load_run_scene;
 use crate::video::VideoPlayer;
@@ -30,6 +31,7 @@ pub struct App {
     scene: Scene,
     camera: OrbitCamera,
     video: VideoPlayer,
+    graphs: GraphsPanel,
 }
 
 impl App {
@@ -39,8 +41,9 @@ impl App {
         let renderer = LineRenderer::new(&gpu, slam_render::OFFSCREEN_COLOR_FORMAT);
         let camera = OrbitCamera::new(Point3::origin(), 10.0, 640.0 / 480.0);
         let video = VideoPlayer::new(data_dir);
+        let graphs = GraphsPanel::default();
 
-        let mut app = App { runs_dir, runs: Vec::new(), selected_dir: None, error: None, gpu, offscreen, renderer, scene: Scene::new(), camera, video };
+        let mut app = App { runs_dir, runs: Vec::new(), selected_dir: None, error: None, gpu, offscreen, renderer, scene: Scene::new(), camera, video, graphs };
         app.refresh_runs();
         if let Some(first) = app.runs.first().cloned() {
             app.select_run(&first);
@@ -59,6 +62,7 @@ impl App {
         match load_run_scene(&run.dir) {
             Ok(loaded) => {
                 self.video.load_for_run(&run.meta.sequence_name, loaded.timestamps.clone());
+                self.graphs.load_for_run(loaded.ate_series.clone(), run.meta.timing);
                 self.scene = loaded.scene;
                 self.camera.target = loaded.center;
                 self.camera.distance = (loaded.extent * 1.5).max(1.0);
@@ -133,6 +137,7 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::SidePanel::left("run_picker").min_width(240.0).show(ctx, |ui| self.run_picker(ui));
         egui::SidePanel::right("video_panel").min_width(320.0).show(ctx, |ui| self.video.ui(ui));
+        egui::TopBottomPanel::bottom("graphs_panel").min_height(220.0).show(ctx, |ui| self.graphs.ui(ui));
         egui::CentralPanel::default().show(ctx, |ui| self.trajectory_view(ui));
     }
 }

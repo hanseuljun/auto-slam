@@ -275,7 +275,7 @@ tested increment, no big-bang integration at the end.
   play/scrub itself not run by the agent, same reasoning as every
   prior milestone's interactive half.
 
-### M5 — Graphs panel
+### M5 — Graphs panel — Done
 
 - Time-series plots alongside the 3D and video panels: ATE/RPE over the
   run (or per-keyframe, if that granularity is cheaply available),
@@ -284,6 +284,39 @@ tested increment, no big-bang integration at the end.
   library" goal (see dependency policy above).
 - Test: unit tests on data-series preparation (run data → plot series,
   correct time/index alignment); manual visual check.
+- **Result**: landed the ATE-per-keyframe half in full; RPE-over-time
+  is a real, scoped-out remainder (see below), not silently dropped.
+  `slam_eval::compute_ate_series` is new (`crates/slam-eval/src/
+  align.rs`) — the same Umeyama alignment `compute_ate` already used,
+  refactored to expose the full per-point error series instead of only
+  summary stats; `compute_ate` itself now calls it internally, zero
+  duplicated logic, and its own pre-existing tests still pass unchanged
+  (confirming the refactor didn't alter behavior). `bin/slam-viz`
+  gained a bottom `GraphsPanel`: an `egui_plot` line chart of
+  per-keyframe aligned ATE, and a bar chart of the run's timing
+  breakdown (vision/optimization/global BA/loop closure seconds) plus
+  its real-time factor, both sourced from data already loaded at
+  run-selection time (`scene_load::LoadedTrajectory::ate_series`,
+  `RunMeta::timing`) — no new I/O. A real-data check via `--dump-
+  scene-stats`: MH_05_difficult's 101-point ATE series loads
+  correctly, RMSE-from-series consistent with the same run's already-
+  reported 0.455m summary number (exact equivalence covered by
+  `slam-eval`'s own new unit test, not re-derived by hand here). 2 new
+  `slam-eval` tests (series is in original per-point order, not sorted
+  like the stats path; RMSE computed from the series matches
+  `compute_ate`'s own RMSE exactly) plus 2 new `bin/slam-viz` tests
+  (`GraphsPanel` starts empty, `load_for_run` stores what it's given
+  verbatim) and one strengthened existing test (`load_run_scene`'s
+  identical-estimated-and-groundtruth fixture now also asserts the ATE
+  series is all near-zero, in the right order and count). `cargo
+  clippy --workspace` clean.
+- **Scoped out, not silently dropped**: a per-pair RPE-over-time series
+  would need the same "expose the full series, not just summary stats"
+  treatment `compute_ate_series` just got, applied to
+  `compute_rpe`/`RpeStats` instead — a legitimate, bounded follow-up
+  if the ATE plot alone turns out not to be enough signal once someone
+  is actually using this panel, not attempted here to keep this
+  milestone's scope matched to what was actually needed.
 
 ### M6 — Synced playback across all three panels
 

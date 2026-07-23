@@ -19,6 +19,13 @@ pub struct LoadedTrajectory {
     /// points — the video panel's playback index space (`plan/
     /// STAGE3.md` M4).
     pub timestamps: Vec<u64>,
+    /// Per-keyframe ATE (Umeyama-aligned position error against
+    /// groundtruth), same order/index space as `timestamps` — the
+    /// graphs panel's headline series (`plan/STAGE3.md` M5). Empty if
+    /// alignment isn't possible (e.g. fewer than 3 points); the graphs
+    /// panel treats that the same as "no run selected" rather than
+    /// erroring the whole load over a plot that just can't be drawn.
+    pub ate_series: Vec<f64>,
 }
 
 /// The actual "data adapter" `plan/STAGE3.md` M2 originally scoped
@@ -34,6 +41,7 @@ pub fn load_run_scene(run_dir: &Path) -> anyhow::Result<LoadedTrajectory> {
     let estimated: Vec<Point3<f64>> = points.estimated.iter().map(|v| Point3::from(*v)).collect();
     let groundtruth: Vec<Point3<f64>> = points.groundtruth.iter().map(|v| Point3::from(*v)).collect();
     let (center, extent) = bounding_sphere(&estimated);
+    let ate_series = slam_eval::compute_ate_series(&points.estimated, &points.groundtruth).unwrap_or_default();
 
     let mut scene = Scene::new();
     scene.add_grid((extent * 1.5).max(1.0), 10, [0.3, 0.3, 0.3]);
@@ -53,7 +61,7 @@ pub fn load_run_scene(run_dir: &Path) -> anyhow::Result<LoadedTrajectory> {
         scene.add_pose_marker(&SE3::new(SO3::identity(), estimated[i].coords), marker_scale, [0.8, 0.8, 0.8]);
     }
 
-    Ok(LoadedTrajectory { scene, center, extent, timestamps: points.timestamps })
+    Ok(LoadedTrajectory { scene, center, extent, timestamps: points.timestamps, ate_series })
 }
 
 /// Axis-aligned bounding box center + diagonal extent, used to frame the
@@ -111,6 +119,13 @@ mod tests {
         assert!(loaded.scene.vertices.len() >= min_expected_polyline_vertices, "expected at least {} vertices from the two polylines alone, got {}", min_expected_polyline_vertices, loaded.scene.vertices.len());
 
         assert_eq!(loaded.timestamps, timestamps, "loaded timestamps must match trajectory.csv's own timestamp column, for the video panel's playback sync (plan/STAGE3.md M4)");
+
+        // estimated == groundtruth here, so the aligned ATE series must
+        // be (near-)zero at every point, and in the same order/length as
+        // the trajectory itself - the graphs panel's headline series
+        // (plan/STAGE3.md M5).
+        assert_eq!(loaded.ate_series.len(), n);
+        assert!(loaded.ate_series.iter().all(|&e| e < 1e-9), "identical estimated/groundtruth trajectories must give ~zero ATE at every point, got {:?}", loaded.ate_series);
 
         std::fs::remove_dir_all(&dir).ok();
     }

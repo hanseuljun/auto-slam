@@ -17,4 +17,5 @@ anyhow.workspace = true
 clap.workspace = true
 eframe.workspace = true
 egui.workspace = true
+egui_plot.workspace = true
 wgpu.workspace = true

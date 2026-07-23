@@ -76,14 +76,20 @@ pub struct AteStats {
     pub num_points: usize,
 }
 
+/// Per-point Euclidean error after Umeyama-aligning `estimated` onto
+/// `groundtruth` — the same alignment `compute_ate` reports summary
+/// stats over, but returning the full in-order series instead, for
+/// time-series display (`bin/slam-viz`'s graphs panel, `plan/STAGE3.md`
+/// M5) where "error over the run," not just one aggregate number,
+/// matters.
+pub fn compute_ate_series(estimated: &[Vector3<f64>], groundtruth: &[Vector3<f64>]) -> Option<Vec<f64>> {
+    let alignment = umeyama_alignment(estimated, groundtruth)?;
+    Some(estimated.iter().zip(groundtruth.iter()).map(|(e, g)| (alignment.apply(e) - g).norm()).collect())
+}
+
 /// Aligns `estimated` onto `groundtruth` via Umeyama and reports ATE stats.
 pub fn compute_ate(estimated: &[Vector3<f64>], groundtruth: &[Vector3<f64>]) -> Option<AteStats> {
-    let alignment = umeyama_alignment(estimated, groundtruth)?;
-    let mut errors: Vec<f64> = estimated
-        .iter()
-        .zip(groundtruth.iter())
-        .map(|(e, g)| (alignment.apply(e) - g).norm())
-        .collect();
+    let mut errors = compute_ate_series(estimated, groundtruth)?;
     errors.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
     let n = errors.len() as f64;
@@ -161,5 +167,18 @@ mod tests {
             .collect();
         let stats = compute_ate(&source, &target).expect("ATE should succeed");
         assert!(stats.rmse > 0.05 && stats.rmse < 0.15);
+    }
+
+    #[test]
+    fn ate_series_is_in_order_and_summarizes_to_the_same_rmse_as_compute_ate() {
+        let source: Vec<Vector3<f64>> = (0..10).map(|i| Vector3::new(i as f64, 0.0, 0.0)).collect();
+        let target: Vec<Vector3<f64>> = source.iter().enumerate().map(|(i, p)| p + Vector3::new(0.0, if i % 2 == 0 { 0.1 } else { -0.1 }, 0.0)).collect();
+
+        let series = compute_ate_series(&source, &target).expect("series should compute");
+        let stats = compute_ate(&source, &target).expect("stats should compute");
+
+        assert_eq!(series.len(), source.len(), "series must be in the same per-point order as the input, not sorted");
+        let rmse_from_series = (series.iter().map(|e| e * e).sum::<f64>() / series.len() as f64).sqrt();
+        assert_relative_eq!(rmse_from_series, stats.rmse, epsilon = 1e-9);
     }
 }

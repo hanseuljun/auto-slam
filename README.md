@@ -65,7 +65,8 @@ for a session-by-session log of what landed and when.
 | Stage 3 M2 | Trajectory/pose-graph scene primitives (point/pose markers) | Done |
 | Stage 3 M3 | `bin/slam-viz` app shell + 3D panel, run picker | Done |
 | Stage 3 M4 | Video frame panel, synced to keyframe timestamps | Done |
-| Stage 3 M5-M7 | Graphs panel, synced playback, run-browser polish | Not started — see `plan/STAGE3.md` |
+| Stage 3 M5 | Graphs panel (per-keyframe ATE + timing bar chart) | Done |
+| Stage 3 M6-M7 | Synced playback across panels, run-browser polish | Not started — see `plan/STAGE3.md` |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
@@ -251,6 +252,19 @@ milestone, despite the plan's text assuming it did) and displayed as an
 against the real `MH_01_easy` dataset already in this repo, not just
 synthetic fixtures: loading a real sequence and syncing to a real
 frame's own timestamp resolves back to the exact expected index.
+
+**Stage 3's M5** added `bin/slam-viz`'s graphs panel: an `egui_plot`
+line chart of per-keyframe aligned ATE, and a bar chart of the run's
+timing breakdown plus its real-time factor. Backed by a new
+`slam_eval::compute_ate_series` — the same Umeyama-alignment machinery
+`compute_ate` already used, refactored to expose the full per-point
+error series instead of only summary stats; `compute_ate` itself now
+calls it internally (zero duplicated logic), and its own pre-existing
+tests still pass unchanged, confirming the refactor didn't alter
+behavior. RPE-over-time was deliberately scoped out rather than
+attempted alongside ATE — it would need the same "expose the series"
+treatment applied to a different function, recorded as a legitimate
+follow-up in `plan/STAGE3.md` rather than silently dropped.
 
 ## Building
 
