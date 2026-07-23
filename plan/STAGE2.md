@@ -1,5 +1,20 @@
 # Stage 2: Real-time VIO + finishing Stage 1
 
+## Status: both goals met — stage complete
+
+M0-M1, M5, and M6 are Done; M2-M4 are deliberately Deferred (M1's own
+finding made them unnecessary to hit the real-time bar, see M1/M5
+below). Both of this stage's goals below are met: real-time factor <=1.0
+on every runnable sequence (M5) and Stage 1's M9/M10 finished (M0, M6).
+M6's remaining tuning space (Huber threshold, window sizing) is
+exhausted for the current pipeline architecture — see M6's entry and
+`memory/decisions/0017` for what was tried and why further gains need
+structural work (M2/M3's deferred scope), not more scalar sweeps. See
+`docs/RESULTS.md` for the numbers this conclusion is measured against.
+Picking up further accuracy or performance work from here means either
+reopening a deferred milestone with a concrete new reason, or scoping a
+new stage.
+
 ## Goal
 
 Two goals for this stage, in the order they're tackled below (the second
@@ -176,7 +191,7 @@ reduction order, not reliant on thread scheduling for correctness).
   the available budget to spare, without needing M2-M4. See M1's
   "unplanned finding" above for why.
 
-### M6 — Finish Stage 1's M10: accuracy closing pass — In progress
+### M6 — Finish Stage 1's M10: accuracy closing pass — Done
 
 - Now that M1-M5 make iteration fast enough to actually iterate on: real
   `sensor.yaml`-derived noise weighting (replacing the ad hoc weights
@@ -212,13 +227,30 @@ reduction order, not reliant on thread scheduling for correctness).
   Unambiguous — regressed ATE on all five sequences (MH_03 doubled,
   MH_05 nearly doubled) and raised the real-time factor on 4 of 5.
   Reverted; `VioParams::default()`'s `window_size: 8` unchanged.
-- Remaining open: outlier-gating threshold tuning. A *smaller* window
-  might be worth trying before a larger one, if window sizing gets
-  revisited (bigger clearly isn't better at this scale with the current
-  ad hoc weights). Initializer robustness specifically for MH_04/MH_05 is
-  lower priority than the MH_02/03 fix was — both already produce real
-  numbers via the dynamic (not static) initializer, so there's no
-  equivalent "produces nothing at all" gap to close there.
+- **Sub-step tried and reverted: outlier-gating (Huber) threshold and
+  smaller `window_size`.** Swept `huber_delta` both tighter (1.5) and
+  looser (5.0) than the default 3.0, and `window_size` both smaller (6,
+  4) than the default 8 (a larger window, 12, had already regressed
+  everything above). All four variants regress or destabilize at least
+  one sequence — most consistently MH_05, which roughly doubles-to-
+  triples its ATE under either Huber-threshold change — for only small,
+  inconsistent gains elsewhere (window_size=6 is the closest to a win,
+  helping MH_04 substantially, but still regresses three of the other
+  four sequences). None meets this milestone's "improvement on every
+  sequence" bar. Reverted; defaults unchanged. Full writeup:
+  `decisions/0017`.
+- **Conclusion**: M6's ad hoc-knob tuning space (noise weights, window
+  size, outlier threshold) is now exhausted — every direction tried
+  either regresses accuracy or trades one sequence's accuracy for
+  another's, never improving all five. A further win needs the larger,
+  structural work already named and deferred in M2/M3 (analytic IMU
+  Jacobians, real preintegration covariance), not more scalar sweeps of
+  the existing knobs. Initializer robustness specifically for MH_04/
+  MH_05 remains lower priority than the MH_02/03 fix was — both already
+  produce real numbers via the dynamic (not static) initializer, so
+  there's no equivalent "produces nothing at all" gap to close there.
+  With M0-M6 all done (M2-M4 deferred by M1's finding), Stage 2's two
+  goals — real-time VIO and finishing Stage 1 — are both met.
 
 ## Out of scope for Stage 2
 

@@ -25,8 +25,11 @@ optimizes both, track-loss recovery verified across full, un-truncated
 real sequences, loop closure with a measurable, real-data accuracy win,
 and a global bundle-adjustment pass over the full trajectory. Stage 2's
 M0 (evaluation + timing harness, finishing Stage 1's M9), M1 (real
-sliding-window marginalization, closing `decisions/0007`), and M5 (the
-real-time bar itself — met via M1, ahead of schedule) are also done — see
+sliding-window marginalization, closing `decisions/0007`), M5 (the
+real-time bar itself — met via M1, ahead of schedule), and M6 (accuracy
+closing pass, finishing Stage 1's M10 — its ad hoc-knob tuning space is
+now exhausted, see below) are also done, meaning **all of Stage 2's
+milestones are now landed or deliberately deferred** — see
 [`docs/RESULTS.md`](docs/RESULTS.md) for real, reproducible accuracy and
 real-time-factor numbers. See [`plan/STAGE1.md`](plan/STAGE1.md) and
 [`plan/STAGE2.md`](plan/STAGE2.md) for the full milestone lists and
@@ -48,7 +51,7 @@ what landed and when.
 | Stage 2 M1 | Sliding-window marginalization (closes Stage 1 `decisions/0007`) | Done |
 | Stage 2 M2-M4 | Analytic Jacobians, sparse solve, `rayon` parallelism | Deferred — not required, real-time bar already met (see M5) |
 | Stage 2 M5 | Real-time validation (factor ≤ 1.0) | **Done — met via M1 alone** |
-| Stage 2 M6 | Accuracy closing pass (finishes Stage 1 M10) | Not started |
+| Stage 2 M6 | Accuracy closing pass (finishes Stage 1 M10) | **Done — see below** |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
@@ -138,29 +141,37 @@ every runnable sequence, roughly half the budget to spare. `plan/
 STAGE2.md` now marks M2-M4 deferred rather than required, and M6
 (finishing Stage 1's M10, accuracy tuning) is next.
 
-Stage 2's M6 (in progress) started by closing the gap in the paragraph
-above: `MH_02_easy` and `MH_03_medium` weren't producing any numbers at
-all. Measuring (not guessing) the actual best-achievable stationary
-window per sequence found both were genuinely stationary but just barely
-past the bootstrap threshold (0.093/0.090 rad/s against a 0.09 cutoff,
+Stage 2's M6 started by closing the gap in the paragraph above:
+`MH_02_easy` and `MH_03_medium` weren't producing any numbers at all.
+Measuring (not guessing) the actual best-achievable stationary window
+per sequence found both were genuinely stationary but just barely past
+the bootstrap threshold (0.093/0.090 rad/s against a 0.09 cutoff,
 `decisions/0015`); loosening it to 0.10 fixed both. `docs/RESULTS.md`
-now has all five `MH_*` sequences for the first time this session.
+now has all five `MH_*` sequences.
 
-M6 also tried its other headline item — real `sensor.yaml`-derived noise
+M6 then tried four more tuning directions, all measured on real data,
+all reverted as net regressions: (1) real `sensor.yaml`-derived noise
 weighting, replacing the ad hoc `SolverConfig` weights `decisions/0006`
-flagged — and this one didn't pan out: built and measured on real data
-at two scopes (full derivation, then a narrower one keeping the
-hardest-to-get-right IMU pose/velocity weights at their tuned values),
-both regressed ATE on most sequences (the narrower version still
-regressed 4 of 5). The simplified formula ignores bias-*uncertainty*'s
-contribution to preintegration error — only full nonlinear covariance
-propagation would capture that, the same class of harder, deferred work
-as Stage 2's M2. Reverted; `decisions/0016` has the full writeup,
-including why this is a genuinely useful negative result, not a wasted
-attempt. Current real numbers, all real-time factors comfortably under
-1.0: MH_01 0.151m, MH_02 0.184m, MH_03 0.511m, MH_04 1.174m, MH_05
-0.455m — see `docs/RESULTS.md`. Remaining M6 scope: outlier-gating
-threshold tuning, keyframe/window sizing.
+flagged, at two scopes — both regressed ATE on most sequences, since
+the simplified formula ignores bias-*uncertainty*'s contribution to
+preintegration error, which only full nonlinear covariance propagation
+would capture (`decisions/0016`); (2) a larger `window_size` (8 -> 12) —
+regressed all five sequences; (3) the outlier-gating Huber threshold,
+tried both tighter (1.5) and looser (5.0) than the default 3.0 — both
+destabilize MH_05 specifically for only small, inconsistent gains
+elsewhere; (4) a smaller `window_size` (6, 4) — 6 helps MH_04
+substantially but regresses three of the other four sequences, 4 is
+worse everywhere (`decisions/0017`). Every direction either regresses
+accuracy outright or trades one sequence's accuracy for another's,
+never improving all five at once — M6's ad hoc-knob tuning space is
+exhausted for this pipeline's architecture; a further win needs the
+same class of structural work as the deferred M2/M3 (analytic IMU
+Jacobians, real preintegration covariance), not more scalar sweeps.
+**M6 is accordingly considered done** — current real numbers, all
+real-time factors comfortably under 1.0: MH_01 0.151m, MH_02 0.184m,
+MH_03 0.511m, MH_04 1.174m, MH_05 0.455m — see `docs/RESULTS.md`. With
+M0-M6 all landed (M2-M4 deferred by M1's finding), both of Stage 2's
+goals — real-time VIO and finishing Stage 1 — are met.
 
 ## Building
 

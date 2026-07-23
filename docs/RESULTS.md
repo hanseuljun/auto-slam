@@ -58,6 +58,15 @@ measured on real data at two scopes, both regressed accuracy on most
 sequences, reverted (`decisions/0016`). The numbers below use the
 original ad hoc weights.
 
+**Stage 2 M6 concluded** after also sweeping the outlier-gating (Huber)
+threshold and `window_size` in both directions (`decisions/0017`) —
+every direction tried regresses at least one sequence (most
+consistently MH_05) for only small, inconsistent gains elsewhere, so
+none meets M6's "improvement on every sequence" bar. The numbers below
+are the final M6 numbers: same as M1's, since every M6 tuning attempt
+(noise weighting, window size, Huber threshold) was reverted except the
+MH_02/03 bootstrap fix, which is already reflected here.
+
 ## ATE RMSE (meters), bounded 600-frame (~30s) clips, no loop closure
 
 | Sequence | This repo (M5+M8+M1, ~30s clip) | ORB-SLAM3 (full seq.) | OKVIS (full seq.) | VINS-Fusion (full seq.) | Kimera (full seq.) |
@@ -127,6 +136,13 @@ real-time goal — see `plan/STAGE2.md` for the resulting re-scoping.
   fixing this needs full nonlinear preintegration covariance propagation,
   not a simpler per-residual-type formula — a real, larger, separate
   undertaking, not a sign this harness is broken.
+- **The remaining ad hoc knobs (Huber threshold, `window_size`) are
+  at a local optimum for the current pipeline, not a global one** —
+  M6 swept both in both directions (`memory/decisions/0017`) and every
+  direction regressed at least one sequence, most consistently MH_05.
+  Further accuracy gains likely need the same structural work as the
+  noise-weighting gap above (analytic IMU Jacobians, real preintegration
+  covariance) rather than more scalar sweeps.
 - Published numbers are quoted from each system's own paper, evaluated by
   its own authors — treated here as directional reference points ("same
   ballpark"), matching `plan/STAGE1.md`'s own framing, not a strict
