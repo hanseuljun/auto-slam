@@ -2,8 +2,10 @@
 name: huber-delta-and-smaller-window-size-tried-reverted
 description: Stage 2 M6's remaining open tuning items (outlier-gating Huber threshold, smaller window_size) both measured on real data and both reverted — current defaults (huber_delta=3.0, window_size=8) remain the best all-around choice found.
 metadata:
-  type: project
+  type: decision
 ---
+
+# Decision: Huber threshold and smaller `window_size` tried, measured, reverted
 
 `plan/STAGE2.md`'s M6 listed two remaining open tuning items after
 [[stationary-window-threshold-loosened-to-0.10]] and the reverted

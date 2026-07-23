@@ -13,9 +13,11 @@ It targets the EuRoC `machine_hall` stereo-inertial dataset
 published stereo-inertial SLAM systems (ORB-SLAM3, OKVIS, VINS-Fusion,
 Kimera-VIO), and — as of Stage 2 — real-time processing (1 second of
 sensor data processed in at most 1 second of wall-clock, **now met**, see
-below). Current plan: [`plan/STAGE2.md`](plan/STAGE2.md);
-[`plan/STAGE1.md`](plan/STAGE1.md) is the original 11-milestone plan
-(mostly done) that Stage 2 finishes and builds on.
+below). Current plan: [`plan/STAGE3.md`](plan/STAGE3.md) (trajectory
+visualization — a hand-written 3D rendering library plus an app that
+browses past runs' results); [`plan/STAGE1.md`](plan/STAGE1.md) and
+[`plan/STAGE2.md`](plan/STAGE2.md) are both done and cover the SLAM
+pipeline itself, which Stage 3 visualizes but doesn't change.
 
 ## Status
 
@@ -29,12 +31,16 @@ sliding-window marginalization, closing `decisions/0007`), M5 (the
 real-time bar itself — met via M1, ahead of schedule), and M6 (accuracy
 closing pass, finishing Stage 1's M10 — its ad hoc-knob tuning space is
 now exhausted, see below) are also done, meaning **all of Stage 2's
-milestones are now landed or deliberately deferred** — see
-[`docs/RESULTS.md`](docs/RESULTS.md) for real, reproducible accuracy and
-real-time-factor numbers. See [`plan/STAGE1.md`](plan/STAGE1.md) and
-[`plan/STAGE2.md`](plan/STAGE2.md) for the full milestone lists and
-[`memory/progress/`](memory/progress/) for a session-by-session log of
-what landed and when.
+milestones are now landed or deliberately deferred**, both of Stage 2's
+own goals met — see [`docs/RESULTS.md`](docs/RESULTS.md) for real,
+reproducible accuracy and real-time-factor numbers. Stage 3 (trajectory
+visualization — `slam-render`, a hand-written 3D rendering library, plus
+`bin/slam-viz`, an app that shows a run's trajectory next to its video
+frames and diagnostic graphs and lets users browse past runs) is
+planned but not started. See [`plan/STAGE1.md`](plan/STAGE1.md),
+[`plan/STAGE2.md`](plan/STAGE2.md), and [`plan/STAGE3.md`](plan/STAGE3.md)
+for the full milestone lists and [`memory/progress/`](memory/progress/)
+for a session-by-session log of what landed and when.
 
 | Milestone | What it adds | Status |
 |---|---|---|
@@ -52,6 +58,7 @@ what landed and when.
 | Stage 2 M2-M4 | Analytic Jacobians, sparse solve, `rayon` parallelism | Deferred — not required, real-time bar already met (see M5) |
 | Stage 2 M5 | Real-time validation (factor ≤ 1.0) | **Done — met via M1 alone** |
 | Stage 2 M6 | Accuracy closing pass (finishes Stage 1 M10) | **Done — see below** |
+| Stage 3 M0-M7 | `slam-render` (3D rendering library) + `bin/slam-viz` (visualization app, per-run browsing) | Not started — see `plan/STAGE3.md` |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO

@@ -1,3 +1,12 @@
+---
+name: stage2-m6-huber-and-window-size-tried-reverted
+description: Stage 2 M6's remaining open items (Huber threshold, smaller window_size) both swept and measured against real data, both reverted — closes out M6, ad hoc-knob tuning space exhausted.
+metadata:
+  type: progress
+---
+
+# Stage 2 M6 — Huber threshold and window size: tried, measured, reverted (M6 done)
+
 Stage 2 M6: tried the two remaining open tuning items from `plan/
 STAGE2.md`'s M6 section — outlier-gating (Huber) threshold, and a
 smaller `window_size` (6 and 4, since 12 had already regressed

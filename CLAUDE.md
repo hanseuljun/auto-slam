@@ -8,13 +8,18 @@ one) working in this repository.
 A stereo-inertial SLAM program and reconstruction library, written in Rust,
 with the SLAM/estimation algorithms implemented from scratch (infra crates
 like `nalgebra`/`image`/`serde` are fine; no OpenCV/g2o/Ceres/existing SLAM
-crates). Current stage plan: `plan/STAGE2.md` (real-time VIO + finishing
-Stage 1's remaining milestones); `plan/STAGE1.md` is the original 11-
-milestone plan, mostly done (M0-M8) and worth reading for that history,
-but M9/M10 are now tracked inside `plan/STAGE2.md` instead. Read the
-current stage plan before picking up work, and update it (or add
-`plan/STAGE3.md` etc.) when the plan itself changes, not just when code
-changes.
+crates). Current stage plan: `plan/STAGE3.md` (trajectory visualization —
+a hand-written 3D rendering library plus an application that browses
+past runs' results). `plan/STAGE2.md` (real-time VIO + finishing Stage
+1's M9/M10) and `plan/STAGE1.md` (the original 11-milestone SLAM plan)
+are both done and worth reading for that history — Stage 3 consumes
+their output (`bin/slam-run`'s per-run CSV/metadata) rather than
+changing their code. `plan/STAGE3.md` has its own dependency-policy
+addendum (a hand-written rendering library is "the algorithm" here;
+`wgpu`/`winit`/`egui` are infra, same spirit as `nalgebra`/`image`
+above). Read the current stage plan before picking up work, and update
+it (or add `plan/STAGE4.md` etc.) when the plan itself changes, not just
+when code changes.
 
 ## Verification: tests + a human-readable test app
 
