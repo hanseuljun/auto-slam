@@ -4,6 +4,7 @@ One line per entry, newest first within each section. See `README.md` for
 what goes where.
 
 ## progress/
+- [2026-07-23-stage3-m3-slam-viz-app-shell.md](progress/2026-07-23-stage3-m3-slam-viz-app-shell.md) — Stage 3 M3 done: new bin/slam-viz app (egui run picker + offscreen-rendered 3D panel), verified end-to-end against this session's own real runs/ history via a --dump-scene-stats flag.
 - [2026-07-23-stage3-m2-trajectory-pose-primitives.md](progress/2026-07-23-stage3-m2-trajectory-pose-primitives.md) — Stage 3 M2 done: slam-render gained point/pose-marker primitives; the CSV-reading half of the data adapter landed in slam-eval (read_trajectory_csv), deliberately not inside slam-render, per the plan's own crate-dependency boundary.
 - [2026-07-23-stage3-m1-slam-render-foundations.md](progress/2026-07-23-stage3-m1-slam-render-foundations.md) — Stage 3 M1 done: new slam-render crate (hand-written orbit camera math, wgpu/winit bootstrap, line/grid/axes primitives), verified with real headless-GPU offscreen-render pixel tests, plus a windowed orbit_demo example for human verification.
 - [2026-07-23-stage3-m0-multi-run-history.md](progress/2026-07-23-stage3-m0-multi-run-history.md) — Stage 3 M0 done: bin/slam-run writes a non-clobbering runs/<sequence>/<run_id>/{trajectory.csv,meta.json} history entry per invocation, additive to the existing latest-snapshot output — the prerequisite for goal 3's per-run browsing.

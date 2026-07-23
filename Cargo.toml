@@ -14,6 +14,7 @@ members = [
     "crates/slam-render",
     "bin/slam-inspect",
     "bin/slam-run",
+    "bin/slam-viz",
 ]
 
 [workspace.package]
@@ -37,6 +38,8 @@ wgpu = "0.20"
 winit = "0.29"
 bytemuck = { version = "1", features = ["derive"] }
 pollster = "0.3"
+eframe = "0.27"
+egui = "0.27"
 
 slam-core = { path = "crates/slam-core" }
 slam-dataset = { path = "crates/slam-dataset" }

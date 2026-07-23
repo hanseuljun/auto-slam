@@ -62,7 +62,9 @@ for a session-by-session log of what landed and when.
 | Stage 2 M6 | Accuracy closing pass (finishes Stage 1 M10) | **Done — see below** |
 | Stage 3 M0 | Non-clobbering per-run output history in `bin/slam-run` | Done |
 | Stage 3 M1 | `slam-render` foundations (camera, GPU bootstrap, line/grid/axes primitives) | Done |
-| Stage 3 M2-M7 | Trajectory primitives, `bin/slam-viz` (3D/video/graph panels, per-run browsing) | Not started — see `plan/STAGE3.md` |
+| Stage 3 M2 | Trajectory/pose-graph scene primitives (point/pose markers) | Done |
+| Stage 3 M3 | `bin/slam-viz` app shell + 3D panel, run picker | Done |
+| Stage 3 M4-M7 | Video/graph panels, synced playback, run-browser polish | Not started — see `plan/STAGE3.md` |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
@@ -207,6 +209,37 @@ and passing `cargo clippy` is confirmed, but actually looking at it is
 for a human, not this repo's automated checks (see `plan/STAGE3.md`'s
 "Verifying a GUI deliverable" section for why that split is the right
 bar for this stage).
+
+**Stage 3's M2** extended `slam-render` with `Scene::add_point_marker`
+(a crosshair, since `LineList`-only rendering has no point-sprite
+pipeline) and `Scene::add_pose_marker` (local axes + a small pyramid
+wireframe at an `SE3` pose, via `slam-core::SE3::transform`). The
+plan's original text implied a CSV-to-`Scene` "data adapter" living
+inside `slam-render` itself, which turned out to be in tension with
+the plan's own "`slam-render` depends on `slam-core` only" layout —
+resolved by adding `slam_eval::read_trajectory_csv` (the exact inverse
+of the existing writer) instead, so a consumer that already depends on
+both crates (`bin/slam-viz`, M3) does the actual "load a real run and
+build a Scene" wiring, one line, rather than coupling `slam-render` to
+this pipeline's CSV format.
+
+**Stage 3's M3** added `bin/slam-viz`: an `egui` run picker (listing
+`runs/<sequence>/<run_id>/` history, click to load) next to a 3D panel.
+Rather than sharing one `wgpu` device/render pass between `egui`'s own
+rendering and `slam-render`'s custom pipeline (real but fiddly
+engineering — `egui`'s callback API hands you an already-open render
+pass, not a fresh encoder), the 3D panel renders into `slam-render`'s
+already-tested `OffscreenTarget` and displays the read-back pixels as a
+plain `egui` texture — one CPU pixel round-trip per frame, a real cost
+but a non-issue for a post-hoc viewer not held to Stage 2's real-time
+bar. A `--dump-scene-stats` flag gives a non-visual smoke check: run
+against this session's own real `runs/` history it correctly discovered
+all 7 real runs, sorted them, and loaded the most recent into a real
+scene (818 vertices, sane bounding-box center/extent) — genuine
+end-to-end verification against real pipeline output, not just
+synthetic test fixtures. `cargo run --release --bin slam-viz` opens the
+interactive app (drag-orbit/pan, scroll-zoom, click a run in the left
+panel) for the same human-verification step M1's demo needs.
 
 ## Building
 

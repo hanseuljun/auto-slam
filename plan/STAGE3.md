@@ -206,7 +206,7 @@ tested increment, no big-bang integration at the end.
   test (`read_trajectory_csv` round trip) — `slam-render` 14 -> 19,
   `slam-eval` 19 -> 20. `cargo clippy --workspace` clean throughout.
 
-### M3 — `bin/slam-viz`: application shell + 3D panel
+### M3 — `bin/slam-viz`: application shell + 3D panel — Done
 
 - New binary: `egui`-based window, a run picker listing
   `runs/<sequence>/<run_id>/` directories from M0 (sequence, timestamp,
@@ -216,6 +216,32 @@ tested increment, no big-bang integration at the end.
   `runs/` directory (correct runs found, sorted, metadata parsed);
   manual run of the app confirming the 3D panel actually renders the
   selected trajectory.
+- **Result**: landed with a lower-risk 3D-integration approach than
+  originally implied — rather than sharing one `wgpu` device/render
+  pass between `egui`'s own rendering and `slam-render`'s `LineRenderer`
+  (real, but fiddly, engineering: `egui`'s custom-3D-callback API hands
+  you an already-open render pass, not a fresh encoder, so `LineRenderer`
+  would need a second code path just for that), the 3D panel renders
+  into `slam-render`'s already-tested `OffscreenTarget` (its own,
+  separate `wgpu::Device` — `eframe` happens to default to a `glow`/
+  OpenGL backend for its own rendering anyway, so there was never a
+  device to share) and displays the read-back pixels as a plain `egui`
+  texture. One CPU pixel round-trip per frame, a real cost but a
+  non-issue at this milestone's scope (post-hoc visualization of a
+  completed run, not held to Stage 2's real-time bar). `bin/slam-viz`'s
+  `--dump-scene-stats` flag (the plan's own suggested non-visual smoke
+  check) run against this session's real `runs/` history discovered
+  all 7 real runs from Stage 3 M0's own testing, sorted correctly, and
+  loaded a real trajectory into a real `Scene` (818 vertices, sane
+  bounding-box center/extent) — genuine end-to-end proof against real
+  data, not synthetic fixtures alone. 5 new `cargo test`s (run discovery
+  sorting/skip-invalid, scene-loading bounds/vertex-count against a
+  known-shape trajectory, both missing-file-is-an-error-not-a-panic
+  cases). `cargo clippy --workspace` clean. Windowed mode itself (drag-
+  orbit, drag-pan, scroll-zoom, run-picker clicks) builds and is
+  clippy-clean but not run by the agent, same reasoning as M1's
+  `orbit_demo` — needs the user's own visual confirmation via `cargo run
+  --release --bin slam-viz`.
 
 ### M4 — Video frame panel
 

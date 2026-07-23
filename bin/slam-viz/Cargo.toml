@@ -1,0 +1,19 @@
+[package]
+name = "slam-viz"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "slam-viz"
+path = "src/main.rs"
+
+[dependencies]
+slam-core.workspace = true
+slam-eval.workspace = true
+slam-render.workspace = true
+nalgebra.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+eframe.workspace = true
+egui.workspace = true
+wgpu.workspace = true
