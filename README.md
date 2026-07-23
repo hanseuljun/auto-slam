@@ -12,13 +12,16 @@ It targets the EuRoC `machine_hall` stereo-inertial dataset
 (`MH_01_easy` .. `MH_05_difficult`), aiming for accuracy competitive with
 published stereo-inertial SLAM systems (ORB-SLAM3, OKVIS, VINS-Fusion,
 Kimera-VIO), and — as of Stage 2 — real-time processing (1 second of
-sensor data processed in at most 1 second of wall-clock, **now met**, see
-below), and — as of Stage 3 — trajectory visualization (`slam-render` +
-`bin/slam-viz`, **now done**, see below). All three stage plans
-([`plan/STAGE1.md`](plan/STAGE1.md), [`plan/STAGE2.md`](plan/STAGE2.md),
-[`plan/STAGE3.md`](plan/STAGE3.md)) are complete; picking up further
-work here means either a stretch goal one of them left deferred, or
-scoping a new stage.
+sensor data processed in at most 1 second of wall-clock, **but only
+measured on a bounded ~30s clip so far**, see Stage 4 below), and — as
+of Stage 3 — trajectory visualization (`slam-render` + `bin/slam-viz`,
+**done**). Current plan: [`plan/STAGE4.md`](plan/STAGE4.md) — make
+`bin/slam-run` default to the *whole* sequence instead of that bounded
+clip, while confirming the real-time bar still holds and accuracy
+doesn't regress. [`plan/STAGE1.md`](plan/STAGE1.md),
+[`plan/STAGE2.md`](plan/STAGE2.md), and
+[`plan/STAGE3.md`](plan/STAGE3.md) are all done and worth reading for
+that history.
 
 ## Status
 
@@ -39,9 +42,16 @@ visualization — `slam-render`, a hand-written 3D rendering library, plus
 `bin/slam-viz`, an app that shows a run's trajectory next to its video
 frames and diagnostic graphs, synced, and lets users browse past runs)
 is also done: M0-M7 all landed (M7's optional multi-run-comparison
-stretch deferred, not required) — see below. See
-[`plan/STAGE1.md`](plan/STAGE1.md),
-[`plan/STAGE2.md`](plan/STAGE2.md), and [`plan/STAGE3.md`](plan/STAGE3.md)
+stretch deferred, not required) — see below. **Stage 4** (full-sequence
+real-time VIO — planned, not started) exists because Stage 2's own
+real-time-factor number was only ever measured on the 600-frame
+bounded clip `bin/slam-run` defaults to, a gap `plan/STAGE2.md`'s own
+Risks section predicted ("a truncated clip that happens to fit inside
+the window can look real-time for reasons that have nothing to do with
+actually fixing the scaling") and `docs/RESULTS.md` admits was never
+closed ("not re-benchmarked with `--full` yet"). See
+[`plan/STAGE1.md`](plan/STAGE1.md), [`plan/STAGE2.md`](plan/STAGE2.md),
+[`plan/STAGE3.md`](plan/STAGE3.md), and [`plan/STAGE4.md`](plan/STAGE4.md)
 for the full milestone lists and [`memory/progress/`](memory/progress/)
 for a session-by-session log of what landed and when.
 
@@ -69,6 +79,7 @@ for a session-by-session log of what landed and when.
 | Stage 3 M5 | Graphs panel (per-keyframe ATE + timing bar chart) | Done |
 | Stage 3 M6 | Synced playback (shared cursor across 3D/video/graphs) | Done |
 | Stage 3 M7 | Run-browser polish (config values shown in the picker) | **Done — stretch (multi-run overlay) deferred** |
+| Stage 4 M0-M3 | Full-sequence default for `bin/slam-run`, real-time + accuracy held on the whole sequence | Not started — see `plan/STAGE4.md` |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
