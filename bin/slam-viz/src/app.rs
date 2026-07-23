@@ -96,7 +96,22 @@ impl App {
         egui::ScrollArea::vertical().show(ui, |ui| {
             for run in &self.runs {
                 let selected = self.selected_dir.as_deref() == Some(run.dir.as_path());
-                let label = format!("{}\n{}\nATE rmse {:.3}m, RT factor {}", run.meta.sequence_name, run.meta.run_id, run.meta.ate.rmse, run.meta.timing.map(|t| format!("{:.3}", t.real_time_factor())).unwrap_or_else(|| "n/a".to_string()));
+                // `plan/STAGE3.md` M7's non-stretch scope: enough metadata to
+                // pick a run meaningfully without leaving the app, "ideally
+                // the config values that differed" — window_size/huber_delta
+                // are exactly the two `memory/decisions/0017`'s tuning
+                // sweeps varied, so surfacing them here is what would have
+                // made comparing those runs possible from inside slam-viz
+                // rather than from memory files.
+                let label = format!(
+                    "{}\n{}\nATE rmse {:.3}m, RT factor {}\nwindow_size={}, huber_delta={:.1}",
+                    run.meta.sequence_name,
+                    run.meta.run_id,
+                    run.meta.ate.rmse,
+                    run.meta.timing.map(|t| format!("{:.3}", t.real_time_factor())).unwrap_or_else(|| "n/a".to_string()),
+                    run.meta.config.window_size,
+                    run.meta.config.huber_delta
+                );
                 if ui.selectable_label(selected, label).clicked() {
                     clicked = Some(run.clone());
                 }

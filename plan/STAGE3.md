@@ -360,7 +360,7 @@ tested increment, no big-bang integration at the end.
   actual highlight/cursor-line motion needs the user's own `cargo run`,
   same as every prior interactive-half item.
 
-### M7 — Run browser polish: this is goal 3's actual delivery
+### M7 — Run browser polish: this is goal 3's actual delivery — Done (core); stretch deferred
 
 - The run picker (M3) becomes the primary way to answer "what did run
   X look like" — enough metadata per run (sequence, timestamp, ATE
@@ -372,6 +372,40 @@ tested increment, no big-bang integration at the end.
   re-visualizing Stage 2 M6's window_size=6-vs-8 sweep) — a strong
   validation of the whole stage's investment against real history, but
   not required to meet the three stated goals.
+- **Result**: the core (non-stretch) scope was already almost entirely
+  delivered by M0 (per-run metadata capture) and M3 (the run picker
+  UI) — the one real gap was that `RunMeta::config`'s `window_size`/
+  `huber_delta` (exactly the two knobs `decisions/0017`'s sweeps
+  varied) weren't shown in the picker's label, so a user still had to
+  go read `meta.json` by hand to compare a tuning sweep's runs. Closed
+  by extending the run picker's label (and `--dump-scene-stats`' output,
+  for parity) to include both — a small, low-risk addition, since the
+  data was already captured and tested, just not surfaced in the UI.
+  Multi-run overlay comparison (the stretch goal) deferred, per the
+  plan's own "not required" framing — a legitimate future addition,
+  not attempted this session since the core goal-3 delivery didn't need
+  it. Verified against this session's real `runs/` history: all 7 runs'
+  `window_size=8, huber_delta=3.0` now visible directly (correctly
+  showing these particular runs used the tuned defaults, not one of
+  `decisions/0017`'s reverted sweep values — those runs weren't kept
+  since they were reverted before this stage's M0 landed). `cargo
+  clippy --workspace` clean.
+
+## Status: all three goals met
+
+M0-M7 are done (M7's stretch sub-goal deliberately deferred, not
+required). Stage 3's three stated goals are all delivered: a hand-
+written 3D rendering library (`slam-render`, goal 1), a visualization
+application showing a run's trajectory next to synced video and graphs
+(`bin/slam-viz`, goal 2), and per-run browsing via the run picker
+(goal 3). Every milestone's non-visual logic is covered by real
+`cargo test`s (many verified against this repo's actual dataset/`runs/`
+output, not synthetic fixtures alone); the interactive/visual half of
+every milestone (`orbit_demo`, `bin/slam-viz`'s windowed mode) builds
+and is `cargo clippy`-clean but needs the user's own eyes to confirm,
+per this plan's own "Verifying a GUI deliverable" section. Picking up
+further work here means either the stretch goal above, or scoping a
+new stage.
 
 ## Verifying a GUI deliverable (extends CLAUDE.md's verification section)
 

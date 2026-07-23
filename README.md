@@ -13,11 +13,12 @@ It targets the EuRoC `machine_hall` stereo-inertial dataset
 published stereo-inertial SLAM systems (ORB-SLAM3, OKVIS, VINS-Fusion,
 Kimera-VIO), and — as of Stage 2 — real-time processing (1 second of
 sensor data processed in at most 1 second of wall-clock, **now met**, see
-below). Current plan: [`plan/STAGE3.md`](plan/STAGE3.md) (trajectory
-visualization — a hand-written 3D rendering library plus an app that
-browses past runs' results); [`plan/STAGE1.md`](plan/STAGE1.md) and
-[`plan/STAGE2.md`](plan/STAGE2.md) are both done and cover the SLAM
-pipeline itself, which Stage 3 visualizes but doesn't change.
+below), and — as of Stage 3 — trajectory visualization (`slam-render` +
+`bin/slam-viz`, **now done**, see below). All three stage plans
+([`plan/STAGE1.md`](plan/STAGE1.md), [`plan/STAGE2.md`](plan/STAGE2.md),
+[`plan/STAGE3.md`](plan/STAGE3.md)) are complete; picking up further
+work here means either a stretch goal one of them left deferred, or
+scoping a new stage.
 
 ## Status
 
@@ -36,10 +37,10 @@ own goals met — see [`docs/RESULTS.md`](docs/RESULTS.md) for real,
 reproducible accuracy and real-time-factor numbers. Stage 3 (trajectory
 visualization — `slam-render`, a hand-written 3D rendering library, plus
 `bin/slam-viz`, an app that shows a run's trajectory next to its video
-frames and diagnostic graphs and lets users browse past runs) is
-underway: M0 (non-clobbering per-run output history in `bin/slam-run`)
-and M1 (`slam-render`'s camera/GPU/primitive foundations) are done — see
-below. See [`plan/STAGE1.md`](plan/STAGE1.md),
+frames and diagnostic graphs, synced, and lets users browse past runs)
+is also done: M0-M7 all landed (M7's optional multi-run-comparison
+stretch deferred, not required) — see below. See
+[`plan/STAGE1.md`](plan/STAGE1.md),
 [`plan/STAGE2.md`](plan/STAGE2.md), and [`plan/STAGE3.md`](plan/STAGE3.md)
 for the full milestone lists and [`memory/progress/`](memory/progress/)
 for a session-by-session log of what landed and when.
@@ -67,7 +68,7 @@ for a session-by-session log of what landed and when.
 | Stage 3 M4 | Video frame panel, synced to keyframe timestamps | Done |
 | Stage 3 M5 | Graphs panel (per-keyframe ATE + timing bar chart) | Done |
 | Stage 3 M6 | Synced playback (shared cursor across 3D/video/graphs) | Done |
-| Stage 3 M7 | Run-browser polish (multi-run comparison, optional) | Core already works via M0/M3 — see `plan/STAGE3.md` |
+| Stage 3 M7 | Run-browser polish (config values shown in the picker) | **Done — stretch (multi-run overlay) deferred** |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
@@ -278,8 +279,32 @@ graphs panel's ATE series were already built from the same source, row
 not a separate thing to keep consistent. With M0-M6 done, Stage 3's
 three goals are functionally met — a hand-written 3D rendering library,
 an app showing the trajectory next to synced video and graphs, and
-per-run browsing. M7 (run-browser polish, multi-run comparison) is
-polish on a working whole, not a missing capability.
+per-run browsing.
+
+**Stage 3's M7** closed the one real gap left in "browse results per
+run": `RunMeta`'s config values (`window_size`/`huber_delta` — the two
+knobs `decisions/0017`'s tuning sweeps varied) were captured and tested
+since M0 but never actually shown in the run picker, so comparing a
+sweep's runs still meant reading `meta.json` by hand outside the app.
+Extended the picker's label and `--dump-scene-stats`'s output to
+include both — pure display formatting of already-tested data, no new
+logic needed. The stretch goal (side-by-side/overlay comparison of two
+runs' trajectories) is deferred, per the plan's own "not required"
+framing. **With M0-M7 done, all three of Stage 3's goals are met** —
+`slam-render` (a real, hand-written 3D rendering library, verified with
+genuine GPU-backed pixel-readback tests, not just camera math),
+`bin/slam-viz` (3D + video + graphs panels, synced to one cursor), and
+per-run browsing (the run picker, now showing enough per-run detail to
+compare tuning sweeps without leaving the app). Every milestone's
+non-visual logic has real `cargo test` coverage, much of it verified
+against this repo's actual dataset and this session's own real `runs/`
+output, not synthetic fixtures alone — the interactive/visual half of
+every milestone builds and is `cargo clippy`-clean throughout, but was
+intentionally never run by the agent (launching a GUI window isn't
+something these tools can drive or observe, and doing so unprompted
+would pop up on the user's real desktop): `cargo run -p slam-render
+--example orbit_demo` and `cargo run --release --bin slam-viz` are
+there for the user's own visual confirmation.
 
 ## Building
 

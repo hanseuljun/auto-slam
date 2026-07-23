@@ -4,6 +4,7 @@ One line per entry, newest first within each section. See `README.md` for
 what goes where.
 
 ## progress/
+- [2026-07-23-stage3-m7-run-browser-polish-stage-complete.md](progress/2026-07-23-stage3-m7-run-browser-polish-stage-complete.md) — Stage 3 M7 done (core; stretch deferred): run picker now shows window_size/huber_delta. M0-M7 landed — all three of Stage 3's goals met, stage complete.
 - [2026-07-23-stage3-m6-synced-playback.md](progress/2026-07-23-stage3-m6-synced-playback.md) — Stage 3 M6 done: one shared cursor (video panel's scrub_index) drives a 3D highlight marker and a graphs-panel VLine; mostly wiring since the three panels' data already shared the same index space by construction.
 - [2026-07-23-stage3-m5-graphs-panel.md](progress/2026-07-23-stage3-m5-graphs-panel.md) — Stage 3 M5 done: bin/slam-viz gained a graphs panel (per-keyframe ATE + timing bar chart) backed by new slam_eval::compute_ate_series; RPE-over-time deliberately scoped out and recorded, not silently dropped.
 - [2026-07-23-stage3-m4-video-panel.md](progress/2026-07-23-stage3-m4-video-panel.md) — Stage 3 M4 done: bin/slam-viz gained a video panel synced via new slam_dataset::nearest_cam0_frame_index, verified against the real MH_01_easy dataset already in this repo.

@@ -53,7 +53,7 @@ fn dump_scene_stats(runs_dir: &std::path::Path) -> anyhow::Result<()> {
     let discovered = runs::discover_runs(runs_dir);
     println!("discovered {} run(s) under {}", discovered.len(), runs_dir.display());
     for run in &discovered {
-        println!("  {} / {} — ATE rmse={:.3}m", run.meta.sequence_name, run.meta.run_id, run.meta.ate.rmse);
+        println!("  {} / {} — ATE rmse={:.3}m, window_size={}, huber_delta={:.1}", run.meta.sequence_name, run.meta.run_id, run.meta.ate.rmse, run.meta.config.window_size, run.meta.config.huber_delta);
     }
 
     let Some(latest) = discovered.first() else {
