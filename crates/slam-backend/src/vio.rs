@@ -33,6 +33,22 @@ pub struct VioParams {
     /// naive-drop's "forgotten at the next eviction" behavior. See
     /// `marginalize_evicted_keyframe`'s doc comment.
     pub max_marginalization_pose_jump_meters: f64,
+    /// Caps how many of the most recent keyframes `global_bundle_
+    /// adjustment` includes, instead of literal unbounded `history`
+    /// (`plan/STAGE4.md` M1, closing the gap `plan/STAGE2.md`'s own
+    /// Risks section predicted: `solver.rs`'s dense O(dim^3) LU solve,
+    /// never replaced for this call site, made a full-sequence global BA
+    /// pass take ~957s on `MH_01_easy`'s 741 keyframes — confirmed via
+    /// live profiling, not assumed — dominating total wall-clock far
+    /// past the per-frame VIO loop's own already-real-time cost). Older
+    /// keyframes outside the cap simply keep whatever pose the
+    /// windowed/marginalized solve already gave them; without loop
+    /// closure chained into this pipeline, global BA over the *full*
+    /// history wasn't preventing the accumulated-drift problem full-
+    /// sequence runs also surfaced anyway (`memory/progress/2026-07-23-
+    /// stage4-m0-mh01-full-sequence-measured.md`), so bounding its scope
+    /// is a real cost fix, not a knowingly-worse accuracy tradeoff.
+    pub max_global_ba_keyframes: usize,
     pub lk: LkParams,
     pub stereo: StereoMatchParams,
     pub solver: SolverConfig,
@@ -49,6 +65,13 @@ impl Default for VioParams {
             min_new_landmark_pixel_distance: 12.0,
             max_pose_jump_meters: 2.0,
             max_marginalization_pose_jump_meters: 10.0,
+            // ~1.5x the ~100-keyframe scale Stage 2/3's own bounded-clip
+            // testing already exercised (see the field's own doc comment
+            // for the cost math this bounds) — comfortably "global"
+            // (spans well past the sliding window) while keeping the
+            // dense solve's cost small and independent of total sequence
+            // length.
+            max_global_ba_keyframes: 150,
             lk: LkParams::default(),
             stereo: StereoMatchParams::default(),
             solver: SolverConfig::default(),
@@ -585,17 +608,25 @@ impl VioPipeline {
         self.history.iter().chain(self.window.iter()).map(|kf| (kf.timestamp_ns, kf.state.pose)).collect()
     }
 
-    /// M8: a single "global" bundle-adjustment pass over the *entire*
-    /// retained trajectory (history + current window, in creation order),
-    /// reusing the same `slam_optim::Problem`/`optimize` machinery
-    /// `run_optimization` uses per-window — just with every keyframe
-    /// included instead of a bounded sliding window. A one-shot pass
-    /// (e.g. after loop closure, or at the end of a run), not something
-    /// to call every frame: it re-solves the whole accumulated problem,
-    /// which grows with trajectory length. Returns the number of
-    /// keyframes included. Keyframe 0 (the very first of the whole
-    /// trajectory) remains the sole gauge anchor, same as every windowed
-    /// `run_optimization` call along the way.
+    /// M8: a single "global" bundle-adjustment pass over the most recent
+    /// `params.max_global_ba_keyframes` retained keyframes (history plus
+    /// current window, in creation order), reusing the same
+    /// `slam_optim::Problem`/`optimize` machinery `run_optimization`
+    /// uses per-window — just with a much larger (but still bounded, see
+    /// `VioParams::max_global_ba_keyframes`'s own doc comment for why
+    /// "bounded" and not "literal full history") span included instead
+    /// of the small sliding window. A one-shot pass (e.g. after loop
+    /// closure, or at the end of a run), not something to call every
+    /// frame. Returns the number of keyframes actually included in this
+    /// pass (== every keyframe ever created only when that total is
+    /// under the cap — small test scenarios stay literally "the whole
+    /// trajectory," as before). The oldest *included* keyframe (not
+    /// necessarily the true first keyframe of the whole trajectory, once
+    /// the cap is active) is the gauge anchor for this call, same
+    /// generic mechanism every windowed `run_optimization` call already
+    /// uses — `slam_optim::Problem`'s own indexing is always relative to
+    /// "whatever's first in this `Problem`," so bounding scope here needs
+    /// no protocol change on the solver side.
     pub fn global_bundle_adjustment(&mut self) -> usize {
         let start = Instant::now();
         let total = self.global_bundle_adjustment_inner();
@@ -611,7 +642,11 @@ impl VioPipeline {
         let mut imu_factors = Vec::new();
         let mut bias_rw_factors = Vec::new();
 
-        for (kf_idx, kf) in self.history.iter().chain(self.window.iter()).enumerate() {
+        let total_ever = self.history.len() + self.window.len();
+        let included_start = total_ever.saturating_sub(self.params.max_global_ba_keyframes);
+
+        for (global_idx, kf) in self.history.iter().chain(self.window.iter()).enumerate().skip(included_start) {
+            let kf_idx = global_idx - included_start;
             keyframes.push(kf.state);
             for obs in &kf.observations {
                 let local_idx = *local_landmark_ids.entry(obs.landmark_id).or_insert_with(|| {
@@ -629,9 +664,19 @@ impl VioPipeline {
                     observed_normalized: obs.normalized,
                 });
             }
-            if let Some((preint, dt)) = &kf.imu_edge {
-                imu_factors.push(ImuFactorSpec { i: kf_idx - 1, j: kf_idx, preint: preint.clone(), dt: *dt });
-                bias_rw_factors.push(BiasRwFactorSpec { i: kf_idx - 1, j: kf_idx });
+            // `kf_idx > 0` (not just "has an imu_edge"): once the cap
+            // excludes the true first keyframe, the oldest *included*
+            // keyframe still has a real `imu_edge` pointing at a now-
+            // excluded previous keyframe — including it here would
+            // reference a keyframe index that doesn't exist in this
+            // bounded `Problem` (an out-of-range/underflow bug the
+            // unbounded case never had to guard against, since
+            // `history[0]`'s own `imu_edge` is always `None`).
+            if kf_idx > 0 {
+                if let Some((preint, dt)) = &kf.imu_edge {
+                    imu_factors.push(ImuFactorSpec { i: kf_idx - 1, j: kf_idx, preint: preint.clone(), dt: *dt });
+                    bias_rw_factors.push(BiasRwFactorSpec { i: kf_idx - 1, j: kf_idx });
+                }
             }
         }
 
@@ -642,18 +687,22 @@ impl VioPipeline {
             reprojection_obs,
             imu_factors,
             bias_rw_factors,
-            // Global BA always includes the whole trajectory back to its
-            // true first keyframe (history[0]), which is still the gauge
-            // anchor here — the incremental `self.prior` is for the
-            // windowed path only.
+            // The oldest *included* keyframe (local index 0) is this
+            // call's gauge anchor — the true first keyframe of the whole
+            // trajectory only when `included_start == 0` (total ever
+            // created is under the cap). No prior is supplied for it: an
+            // older-but-excluded keyframe's own information isn't folded
+            // in as a soft constraint, it's simply left out of this pass
+            // (see `max_global_ba_keyframes`'s doc comment for why that's
+            // an acceptable tradeoff here, not a silent accuracy cut).
             priors: Vec::new(),
             gravity_world: self.gravity_world,
         };
 
         optimize(&mut problem, &self.params.solver);
 
-        for (kf_idx, kf) in self.history.iter_mut().chain(self.window.iter_mut()).enumerate() {
-            kf.state = problem.keyframes[kf_idx];
+        for (global_idx, kf) in self.history.iter_mut().chain(self.window.iter_mut()).enumerate().skip(included_start) {
+            kf.state = problem.keyframes[global_idx - included_start];
         }
         for (&global_id, &local_idx) in &local_landmark_ids {
             self.landmarks[global_id] = problem.landmarks[local_idx];

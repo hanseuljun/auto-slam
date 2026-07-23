@@ -12,13 +12,13 @@ It targets the EuRoC `machine_hall` stereo-inertial dataset
 (`MH_01_easy` .. `MH_05_difficult`), aiming for accuracy competitive with
 published stereo-inertial SLAM systems (ORB-SLAM3, OKVIS, VINS-Fusion,
 Kimera-VIO), and — as of Stage 2 — real-time processing (1 second of
-sensor data processed in at most 1 second of wall-clock, **but only
-measured on a bounded ~30s clip so far**, see Stage 4 below), and — as
-of Stage 3 — trajectory visualization (`slam-render` + `bin/slam-viz`,
-**done**). Current plan: [`plan/STAGE4.md`](plan/STAGE4.md) — make
-`bin/slam-run` default to the *whole* sequence instead of that bounded
-clip, while confirming the real-time bar still holds and accuracy
-doesn't regress. [`plan/STAGE1.md`](plan/STAGE1.md),
+sensor data processed in at most 1 second of wall-clock, **now
+confirmed on full, un-truncated sequences too, Stage 4 M0/M1**, see
+below), and — as of Stage 3 — trajectory visualization (`slam-render` +
+`bin/slam-viz`, **done**). Current plan: [`plan/STAGE4.md`](plan/STAGE4.md)
+— `bin/slam-run --full` is now real-time on every sequence; next is
+confirming full-sequence accuracy doesn't regress before flipping the
+default. [`plan/STAGE1.md`](plan/STAGE1.md),
 [`plan/STAGE2.md`](plan/STAGE2.md), and
 [`plan/STAGE3.md`](plan/STAGE3.md) are all done and worth reading for
 that history.
@@ -43,8 +43,8 @@ visualization — `slam-render`, a hand-written 3D rendering library, plus
 frames and diagnostic graphs, synced, and lets users browse past runs)
 is also done: M0-M7 all landed (M7's optional multi-run-comparison
 stretch deferred, not required) — see below. **Stage 4** (full-sequence
-real-time VIO — planned, not started) exists because Stage 2's own
-real-time-factor number was only ever measured on the 600-frame
+real-time VIO — M0/M1 done, M2 in progress) exists because Stage 2's
+own real-time-factor number was only ever measured on the 600-frame
 bounded clip `bin/slam-run` defaults to, a gap `plan/STAGE2.md`'s own
 Risks section predicted ("a truncated clip that happens to fit inside
 the window can look real-time for reasons that have nothing to do with
@@ -79,7 +79,10 @@ for a session-by-session log of what landed and when.
 | Stage 3 M5 | Graphs panel (per-keyframe ATE + timing bar chart) | Done |
 | Stage 3 M6 | Synced playback (shared cursor across 3D/video/graphs) | Done |
 | Stage 3 M7 | Run-browser polish (config values shown in the picker) | **Done — stretch (multi-run overlay) deferred** |
-| Stage 4 M0-M3 | Full-sequence default for `bin/slam-run`, real-time + accuracy held on the whole sequence | Not started — see `plan/STAGE4.md` |
+| Stage 4 M0 | Full-sequence baseline measurement (all 5 sequences) | Done |
+| Stage 4 M1 | Bound `global_bundle_adjustment`'s scope (real-time fix) | **Done — whole-run wall-clock now ≤1.0x on all 5 sequences** |
+| Stage 4 M2 | Root-cause full-sequence ATE regression (5.6x-25.6x vs. bounded clip) | Not started — confirmed real, see `docs/RESULTS.md` |
+| Stage 4 M3 | Flip `bin/slam-run`'s default to full-sequence | Blocked on M2 — see `plan/STAGE4.md` |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
@@ -316,6 +319,33 @@ something these tools can drive or observe, and doing so unprompted
 would pop up on the user's real desktop): `cargo run -p slam-render
 --example orbit_demo` and `cargo run --release --bin slam-viz` are
 there for the user's own visual confirmation.
+
+**Stage 4's M0/M1**: `bin/slam-run --full`'s real-time performance had
+never actually been measured — `plan/STAGE2.md`'s own Risks section
+predicted this gap ("a truncated clip that happens to fit inside the
+window can look real-time for reasons that have nothing to do with
+actually fixing the scaling") and `docs/RESULTS.md` admitted it was
+never closed. Measuring `MH_01_easy`'s full sequence live-profiled a
+real bottleneck: `global_bundle_adjustment` still solved densely
+(`O(n^3)`) over *every keyframe ever created* — Stage 2 M1's
+marginalization only ever bounded the windowed solver, not this call
+site — costing 957 seconds on that one sequence's 741 keyframes. Fixed
+by capping global BA to the most recent 150 keyframes
+(`VioParams::max_global_ba_keyframes`) instead of unbounded history —
+no new linear algebra, just bounding what goes into the same,
+already-tested solver. Global BA's cost dropped ~123x (957s -> 7.8s);
+confirmed on all 5 sequences, whole-run wall-clock is now under the
+data duration everywhere (0.49x-0.81x). Confirmed the fix didn't trade
+accuracy for speed, by measuring `MH_01_easy`'s ATE both before and
+after on the identical sequence: 3.869m -> 3.868m, unchanged — global
+BA over the full history wasn't preventing drift anyway (this harness
+doesn't chain in loop closure), so bounding its scope cost nothing.
+That said, full-sequence ATE is genuinely 5.6x-25.6x worse than the
+bounded-clip numbers above, on every sequence — a real, confirmed,
+pre-existing gap (not caused by this fix), and Stage 4's next open
+item (M2) before the default can flip to full-sequence. See
+`docs/RESULTS.md`'s "Full-sequence results" section for the complete
+before/after table.
 
 ## Building
 

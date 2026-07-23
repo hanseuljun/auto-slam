@@ -34,16 +34,18 @@ and `runs/summary.csv` paths above are unchanged and still reflect the
 latest run. `plan/STAGE3.md`'s `bin/slam-viz` (goal 3, not yet built)
 will browse this history.
 
-**Results below are from the default bounded run** (600 frames, ~30s of
-data per sequence) — not `--full`. An earlier attempt at this exact
-milestone ran the un-truncated pipeline over one full sequence and took
-30+ minutes wall-clock before being rolled back; see
-`memory/decisions/0011` for the determinism bug found and fixed since
-then. Global BA's O(n^3) scaling (`plan/STAGE2.md`'s original "What we
-already know") is now bounded by Stage 2 M1's real marginalization — a
-full run should be far more practical since, though not re-benchmarked
-with `--full` yet. All numbers below are reproducible bit-for-bit run to
-run (`decisions/0011`'s fix).
+**Results below (up to "Full-sequence results") are from the default
+bounded run** (600 frames, ~30s of data per sequence) — not `--full`.
+An earlier attempt at this exact milestone ran the un-truncated
+pipeline over one full sequence and took 30+ minutes wall-clock before
+being rolled back; see `memory/decisions/0011` for the determinism bug
+found and fixed since then. Global BA's O(n^3) scaling over the
+*windowed* solver (`plan/STAGE2.md`'s original "What we already know")
+is bounded by Stage 2 M1's real marginalization, but `global_bundle_
+adjustment` itself was not — it kept the same O(n^3) scaling over
+literal unbounded history until Stage 4 M1 fixed it; see "Full-sequence
+results" below for the real, measured before/after. All numbers below
+are reproducible bit-for-bit run to run (`decisions/0011`'s fix).
 
 **Updated after Stage 2 M1** (real marginalization, `decisions/0007`,
 plus two real bugs it surfaced and fixed — `decisions/0012`-`0014`,
@@ -129,6 +131,64 @@ recoveries removed most of the *cost*, not just the accuracy problem.
 Because of this, Stage 2's M2 (analytic IMU Jacobians), M3 (sparse
 solve), and M4 (`rayon` parallelism) are no longer required to hit the
 real-time goal — see `plan/STAGE2.md` for the resulting re-scoping.
+
+## Full-sequence results (Stage 4 M0/M1)
+
+`plan/STAGE4.md`'s goal: make `bin/slam-run --full` (not just the
+bounded 600-frame clip above) both real-time and no worse on accuracy.
+Measured on all 5 sequences, foreground (background execution of a
+multi-minute `--full` run proved unreliable this session — see
+`memory/progress/2026-07-23-stage4-m0-mh01-full-sequence-measured.md`).
+
+**Before the M1 fix**: `MH_01_easy` alone was profiled live (macOS
+`sample`) mid-run — 100% of sampled stack frames were inside
+`global_bundle_adjustment`'s dense LU solve, which took **957.2s** on
+that sequence's 741 keyframes (`(741-1)*15=11100`-dimensional dense
+system, `O(dim^3)`). This confirms `plan/STAGE2.md`'s own Risks section,
+written in advance: *"a truncated clip that happens to fit inside the
+window can look real-time for reasons that have nothing to do with
+actually fixing the scaling."* `global_bundle_adjustment` was never
+bounded by Stage 2 M1's marginalization (that only bounds the
+*windowed* solver) — it still built its `Problem` from every keyframe
+ever created.
+
+**The fix (`plan/STAGE4.md` M1)**: `VioParams::max_global_ba_keyframes`
+(default 150) caps global BA to the most recent N keyframes instead of
+literal unbounded history — no new linear algebra, reuses the existing,
+already-tested `Problem`/`optimize` machinery, just bounds what goes
+into it. All 5 sequences, full un-truncated, after the fix:
+
+| Sequence | keyframes | vision (s) | optimization (s) | global BA (s) | total wall-clock (s) | data (s) | whole-run factor | ATE full (m) | ATE bounded clip (m) |
+|---|---|---|---|---|---|---|---|---|---|
+| MH_01_easy | 741 | 115.2 | 26.8 | 7.8 | 149.8 | 184.0 | **0.814** | 3.868 | 0.151 |
+| MH_02_easy | 552 | 79.3 | 18.5 | 7.7 | 105.5 | 152.0 | **0.694** | 3.854 | 0.184 |
+| MH_03_medium | 536 | 71.2 | 16.2 | 7.4 | 94.8 | 134.9 | **0.702** | 3.460 | 0.511 |
+| MH_04_difficult | 364 | 37.9 | 5.2 | 7.0 | 50.1 | 101.6 | **0.493** | 6.600 | 1.174 |
+| MH_05_difficult | 456 | 54.6 | 12.1 | 7.4 | 74.1 | 113.6 | **0.652** | 6.818 | 0.455 |
+
+"whole-run factor" = `(vision + optimization + global_ba) /
+data_seconds` — redefined for Stage 4's goal 2 to count *everything*,
+not just the per-frame loop (the old `real_time_factor()` metric
+excludes global BA by design, which is exactly what let this gap hide:
+it reported 0.686 for `MH_01_easy` even at 957s of global-BA cost).
+**Goal 2 (real-time on the full sequence) is now met on every sequence**
+— global BA's cost dropped ~120x (957.2s -> 7.8s on `MH_01_easy`) and
+is now roughly flat (~7-8s) regardless of sequence length, since it no
+longer scales with total keyframe count.
+
+**Goal 3 (accuracy) is not yet met.** Full-sequence ATE is dramatically
+worse than the bounded clip on every sequence (5.6x-25.6x), confirmed
+*not* to be caused by the M1 fix itself — `MH_01_easy`'s ATE was
+3.869m before the fix (unbounded global BA) and 3.868m after (bounded),
+essentially identical, so bounding global BA's scope cost nothing here.
+This is a pre-existing gap the bounded-clip numbers above never
+surfaced: this harness doesn't chain in loop closure
+(`bin/slam-run`'s own documented scope), and un-corrected drift over a
+full ~100-180s trajectory is far larger than over a ~30s clip — but the
+5.6x-25.6x magnitude, and global BA running over the *full* history
+(pre-fix) still leaving ATE this high, is worth real investigation
+before accepting "no loop closure" as the whole explanation. `plan/
+STAGE4.md` M2's open item.
 
 ## Known gaps (honest, not swept under the rug)
 

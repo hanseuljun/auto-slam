@@ -12,11 +12,18 @@ before it landing safely):
    usable for iterating on the rest of this stage," `plan/STAGE2.md`
    M0) — a debt Stage 2 itself flagged as unpaid (see "What we already
    know" below), not an oversight to quietly work around.
-2. **The real-time bar (factor ≤ 1.0) must hold on the full
-   sequence**, not just the bounded clip it was actually measured on.
-   Stage 2's own Risks section named this exact gap in advance and
-   never closed it (see below) — Stage 4 closes it for real, with
-   measured numbers, before flipping the default in goal 1.
+2. **The real-time bar must hold on the full sequence**, not just the
+   bounded clip it was actually measured on. Stage 2's own Risks
+   section named this exact gap in advance and never closed it (see
+   below) — Stage 4 closes it for real, with measured numbers, before
+   flipping the default in goal 1. **Redefined during M0/M1** (a real
+   decision, not an assumption): the existing `real_time_factor()`
+   metric (`vision+optimization only`) turned out to hide global BA's
+   cost entirely once that cost stopped being negligible — it reported
+   "real-time" on a run whose true end-to-end wall-clock was ~5.9x the
+   data duration. Goal 2 now means **whole-run wall-clock (vision +
+   optimization + global BA) ≤ data duration**, the number that
+   actually reflects what running `slam-run` feels like to use.
 3. **Accuracy must not regress** relative to the bounded-clip numbers
    already in `docs/RESULTS.md`. Running more frames is not allowed to
    be a hidden accuracy regression — a bug that only shows up over a
@@ -84,7 +91,7 @@ confirm or rule out with real profiling, not assume.
 Same discipline as every prior stage: measure before fixing, fix before
 changing the default, no milestone closes on an assumed number.
 
-### M0 — Full-sequence baseline measurement
+### M0 — Full-sequence baseline measurement — Done
 
 - Run `bin/slam-run --full` on all 5 sequences (foreground, not
   background — this session's own attempt suggests long-running
@@ -133,14 +140,17 @@ changing the default, no milestone closes on an assumed number.
      needs to actually investigate, not assume "no loop closure"
      covers it.
   Full writeup: `memory/progress/2026-07-23-stage4-m0-mh01-full-
-  sequence-measured.md`. Remaining 4 sequences not yet measured — each
-  full run currently costs ~15-20 minutes wall-clock at this
-  bottleneck's current (unfixed) cost, so finishing M0's full scope
-  serially is expensive; open question (see that memory file) whether
-  to measure all 5 before starting M1's fix, or fix first and
-  re-measure all 5 once, not twice.
+  sequence-measured.md`.
+- **Full result (all 5 sequences, measured after M1's fix landed —
+  the user chose "fix first, then measure all 5 once" over measuring
+  all 5 twice)**: every sequence's whole-run factor is now under 1.0
+  (0.49-0.81 across the five). Every sequence also shows a large
+  full-sequence ATE regression vs. its bounded-clip number (5.6x-25.6x)
+  — a real, pre-existing gap (confirmed independent of M1's fix, see
+  M1's own Result below), now M2's job. Full table: `docs/RESULTS.md`'s
+  "Full-sequence results" section.
 
-### M1 — Root-cause and fix the real-time gap (if M0 confirms one)
+### M1 — Root-cause and fix the real-time gap (if M0 confirms one) — Done
 
 - If M0 shows real-time factor > 1.0 (measured over the *whole* run,
   not just the per-frame VIO loop `plan/STAGE2.md` M5 already validates)
@@ -163,9 +173,42 @@ changing the default, no milestone closes on an assumed number.
   assumed, same bar every prior real-time milestone held to
   (`plan/STAGE2.md` M5's own "Result" note is the template: real
   before/after numbers, not "should be faster now").
+- **Result**: the global-BA hypothesis held. Fix: `VioParams::
+  max_global_ba_keyframes` (default 150) caps `global_bundle_
+  adjustment` to the most recent N keyframes instead of literal
+  unbounded `history` — no new linear algebra (reuses the existing,
+  already-tested `Problem`/`optimize` machinery unchanged, just bounds
+  what goes into it), so this carries much lower correctness risk than
+  a from-scratch sparse solver would have. On `MH_01_easy`: global BA
+  957.2s -> **7.8s** (~123x), whole-run factor 5.89x -> **0.814x**.
+  Confirmed on all 5 sequences: whole-run factor now 0.49-0.81, all
+  under 1.0 (table in `docs/RESULTS.md`). Critically, `MH_01_easy`'s
+  ATE was measured *before and after* this fix on the identical full
+  sequence: 3.869m -> 3.868m, i.e. bounding global BA's scope cost
+  nothing — global BA over the *full* unbounded history wasn't
+  preventing the accuracy problem M0 found anyway (no loop closure
+  means no correcting signal regardless of optimization scope), so this
+  fix is a pure win, not an accuracy-for-speed tradeoff. One new,
+  real correctness risk the bounded scope introduces, found by reading
+  the code (not guessing) and specifically tested for: once the cap
+  excludes the true first keyframe, the new oldest-*included* keyframe
+  still has a real `imu_edge` pointing at a now-excluded keyframe — the
+  old unbounded loop's `if let Some(imu_edge)` check alone would
+  reference a nonexistent local index `-1` (an underflow); fixed with
+  an explicit `kf_idx > 0` guard, and a new test (`global_bundle_
+  adjustment_respects_max_global_ba_keyframes_cap`) exercises exactly
+  this path against real MH_01 data — it would panic, not just report
+  a wrong number, if the guard were missing.
 
-### M2 — Root-cause and fix any accuracy regression (if M0 confirms one)
+### M2 — Root-cause and fix any accuracy regression — confirmed needed, not yet started
 
+- **M0 confirmed this is needed, on all 5 sequences, not just
+  `MH_01_easy`**: full-sequence ATE vs. bounded-clip ATE is 5.6x-25.6x
+  worse across the board (table in `docs/RESULTS.md`'s "Full-sequence
+  results"), and M1's own before/after on `MH_01_easy` (3.869m ->
+  3.868m, unbounded vs. capped global BA) rules out the M1 fix itself
+  as the cause — this is a pre-existing gap the bounded-clip numbers
+  never had the chance to surface, still open.
 - Compare M0's full-sequence ATE/RPE against what the bounded-clip
   numbers plus natural expected drift-over-longer-time would predict —
   full-sequence ATE is *expected* to be numerically larger than a

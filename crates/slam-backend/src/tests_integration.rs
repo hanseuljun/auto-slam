@@ -294,6 +294,76 @@ mod tests {
         );
     }
 
+    /// `plan/STAGE4.md` M1: `global_bundle_adjustment` now caps its scope
+    /// at `VioParams::max_global_ba_keyframes` instead of literal
+    /// unbounded history (the confirmed cause of a ~957s single-call cost
+    /// on `MH_01_easy`'s full 741-keyframe sequence). Reuses the same
+    /// real-data setup as `global_bundle_adjustment_does_not_worsen_ate_
+    /// on_mh01` above, but with a small explicit cap, to check the bound
+    /// is actually respected — and, just as importantly, that keyframes
+    /// older than the cap are genuinely untouched rather than silently
+    /// still included. This also exercises the one real new correctness
+    /// risk the cap introduces: the oldest *included* keyframe (once the
+    /// cap excludes the true first keyframe) has a real `imu_edge`
+    /// pointing at a now-excluded keyframe — a naive port of the old
+    /// unbounded loop would try to build an `ImuFactorSpec` referencing
+    /// local index `-1`, an out-of-range/underflow bug the unbounded
+    /// case never had to guard against (`history[0]`'s own `imu_edge` is
+    /// always `None`). If that guard were missing or wrong, this test
+    /// would panic, not just report a wrong number.
+    #[test]
+    fn global_bundle_adjustment_respects_max_global_ba_keyframes_cap() {
+        let seq = load_sequence("MH_01_easy");
+        let rig = stereo_rig(&seq.calibration);
+
+        let all_gyro: Vec<Vector3<f64>> = seq.imu_samples.iter().map(|s| s.gyro).collect();
+        let start = find_stationary_window(&all_gyro, 200, 0.10).expect("MH_01 should have a stationary window");
+        let accel: Vec<Vector3<f64>> = seq.imu_samples[start..start + 200].iter().map(|s| s.accel).collect();
+        let static_init = static_initialize(&all_gyro[start..start + 200], &accel).expect("static init should succeed");
+        let initial_state = KeyframeState::new(SE3::identity(), Vector3::zeros(), static_init.gyro_bias, Vector3::zeros());
+        let gravity_world = static_init.gravity_direction_body * static_init.gravity_magnitude;
+
+        let num_frames = 150usize.min(seq.cam0_frames.len());
+        let left0 = seq.load_cam0_image(0).unwrap();
+        let right0 = seq.load_cam1_image(0).unwrap();
+
+        let cap = 5usize;
+        let params = VioParams {
+            solver: slam_optim::SolverConfig { max_iterations: 6, ..slam_optim::SolverConfig::default() },
+            max_global_ba_keyframes: cap,
+            ..VioParams::default()
+        };
+        let mut vio = VioPipeline::new(rig, initial_state, seq.cam0_frames[0].timestamp_ns, gravity_world, params);
+        vio.init_map(&left0, &right0);
+
+        let mut prev_timestamp = seq.cam0_frames[0].timestamp_ns;
+        let mut lost_at = None;
+        for i in 1..num_frames {
+            let left = seq.load_cam0_image(i).unwrap();
+            let right = seq.load_cam1_image(i).unwrap();
+            let timestamp = seq.cam0_frames[i].timestamp_ns;
+            let imu_since_last: Vec<_> = seq.imu_samples.iter().filter(|s| s.timestamp_ns > prev_timestamp && s.timestamp_ns <= timestamp).cloned().collect();
+            prev_timestamp = timestamp;
+            if vio.process_frame(&left, &right, timestamp, &imu_since_last).is_none() {
+                lost_at = Some(i);
+                break;
+            }
+        }
+        assert!(lost_at.is_none(), "VIO tracking lost at frame {:?}", lost_at);
+
+        let before = vio.all_keyframe_poses();
+        assert!(before.len() > cap, "need more keyframes than the cap for this test to mean anything, got {} (cap {cap})", before.len());
+
+        let n = vio.global_bundle_adjustment();
+        assert_eq!(n, cap, "global BA should include exactly the capped number of most-recent keyframes, not every keyframe ever created");
+
+        let after = vio.all_keyframe_poses();
+        let excluded_count = before.len() - cap;
+        for i in 0..excluded_count {
+            assert_eq!(before[i].1.matrix(), after[i].1.matrix(), "keyframe {i} is older than the cap and must be untouched by this global BA pass, bit-for-bit");
+        }
+    }
+
     fn vio_default_window_size() -> usize {
         VioParams::default().window_size
     }
