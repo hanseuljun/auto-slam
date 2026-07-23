@@ -19,8 +19,20 @@ recovery M6) plus one global bundle-adjustment pass (M8) — loop closure
 (M7) is not chained into this number, see "Scope" below. Prints ATE/RPE
 and a wall-clock timing breakdown per sequence, and writes
 `runs/<sequence>/trajectory.csv` (per-timestamp estimated vs. groundtruth
-position) plus `runs/summary.csv` (the aggregate table these tables are
-generated from).
+position, always the latest run) plus `runs/summary.csv` (the aggregate
+table these tables are generated from) — same as always.
+
+**Since Stage 3's M0**, each invocation additionally writes a non-
+clobbering history entry per sequence at
+`runs/<sequence>/<run_id>/{trajectory.csv, meta.json}` (`run_id` a
+sortable `YYYYMMDD-HHMMSS-mmm` timestamp) — `meta.json` carries the ATE/
+RPE/timing numbers plus the exact `VioParams`/`SolverConfig` values and
+git commit that run used, so re-running `slam-run` while tuning (as
+`memory/decisions/0016`-`0017` did) no longer overwrites the previous
+attempt's numbers. This is additive: the `runs/<sequence>/trajectory.csv`
+and `runs/summary.csv` paths above are unchanged and still reflect the
+latest run. `plan/STAGE3.md`'s `bin/slam-viz` (goal 3, not yet built)
+will browse this history.
 
 **Results below are from the default bounded run** (600 frames, ~30s of
 data per sequence) — not `--full`. An earlier attempt at this exact

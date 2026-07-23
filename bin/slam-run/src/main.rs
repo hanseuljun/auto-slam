@@ -69,9 +69,17 @@ fn main() -> anyhow::Result<()> {
         anyhow::bail!("no sequences found under data/machine_hall and none given on the command line");
     }
 
+    // One run_id per invocation (not per sequence): all sequences in a
+    // single `slam-run` call share it, so `bin/slam-viz`'s run picker
+    // (`plan/STAGE3.md` M7) can group "this set of sequences was run
+    // together, under this config" the same way `runs/summary.csv`
+    // already aggregates one invocation.
+    let run_id = slam_eval::generate_run_id();
+    let git_commit = slam_eval::current_git_commit();
+
     let mut reports = Vec::new();
     for seq_dir in &sequences {
-        if let Some(report) = run_sequence(seq_dir, &cli.out_dir, cli.full, cli.frames)? {
+        if let Some(report) = run_sequence(seq_dir, &cli.out_dir, cli.full, cli.frames, &run_id, git_commit.as_deref())? {
             reports.push(report);
         }
     }
@@ -94,7 +102,7 @@ fn main() -> anyhow::Result<()> {
 /// local and a medium-horizon drift picture.
 const RPE_DELTAS: &[usize] = &[1, 10];
 
-fn run_sequence(seq_dir: &Path, out_dir: &Path, full: bool, frame_cap: usize) -> anyhow::Result<Option<slam_eval::TrajectoryReport>> {
+fn run_sequence(seq_dir: &Path, out_dir: &Path, full: bool, frame_cap: usize, run_id: &str, git_commit: Option<&str>) -> anyhow::Result<Option<slam_eval::TrajectoryReport>> {
     let name = seq_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| seq_dir.display().to_string());
     println!("==== {name} ====");
 
@@ -200,8 +208,38 @@ fn run_sequence(seq_dir: &Path, out_dir: &Path, full: bool, frame_cap: usize) ->
         return Ok(None);
     };
 
+    // Latest-snapshot path, kept for backward compatibility with
+    // `docs/RESULTS.md`'s existing reproduction instructions and anything
+    // else that reads "the current trajectory" for this sequence
+    // directly, additive to the per-run history written below (`plan/
+    // STAGE3.md` M0 — this stage doesn't own `bin/slam-run`'s existing
+    // consumers, so it doesn't get to break them).
     let csv_path = out_dir.join(&name).join("trajectory.csv");
     slam_eval::write_trajectory_csv(&csv_path, &timestamps, &estimated, &groundtruth)?;
+
+    let run_dir = out_dir.join(&name).join(run_id);
+    let run_csv_path = run_dir.join("trajectory.csv");
+    slam_eval::write_trajectory_csv(&run_csv_path, &timestamps, &estimated, &groundtruth)?;
+
+    let run_meta = slam_eval::RunMeta {
+        sequence_name: name.clone(),
+        run_id: run_id.to_string(),
+        timestamp_utc: chrono::Utc::now().to_rfc3339(),
+        git_commit: git_commit.map(str::to_string),
+        num_frames,
+        config: slam_eval::RunConfig {
+            window_size: params.window_size,
+            keyframe_stride: params.keyframe_stride,
+            huber_delta: params.solver.huber_delta,
+            solver_max_iterations: params.solver.max_iterations,
+            full_sequence: full,
+            frame_cap,
+        },
+        ate: report.ate,
+        rpe: report.rpe.clone(),
+        timing: report.timing,
+    };
+    slam_eval::write_run_meta(run_dir.join("meta.json"), &run_meta)?;
 
     println!(
         "{num_frames} frames ({data_seconds:.1}s of data), {before_ba} keyframes ({lost_frames} unrecoverable single frames), ATE rmse={:.3}m mean={:.3}m median={:.3}m std={:.3}m max={:.3}m",
@@ -219,6 +257,7 @@ fn run_sequence(seq_dir: &Path, out_dir: &Path, full: bool, frame_cap: usize) ->
         timing.real_time_factor()
     );
     println!("wrote trajectory CSV to {}", csv_path.display());
+    println!("wrote this run's history entry to {} (trajectory.csv + meta.json)", run_dir.display());
     println!();
 
     Ok(Some(report))

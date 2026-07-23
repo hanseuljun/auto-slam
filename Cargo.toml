@@ -30,6 +30,8 @@ thiserror = "1"
 rayon = "1"
 clap = { version = "4", features = ["derive"] }
 approx = "0.5"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+serde_json = "1"
 
 slam-core = { path = "crates/slam-core" }
 slam-dataset = { path = "crates/slam-dataset" }

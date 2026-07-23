@@ -18,3 +18,4 @@ slam-backend.workspace = true
 nalgebra.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+chrono.workspace = true

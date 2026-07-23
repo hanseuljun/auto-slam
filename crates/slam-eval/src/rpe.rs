@@ -10,7 +10,7 @@ use crate::align::umeyama_alignment;
 /// interface is position-only for the same reason). It still measures
 /// what ATE alone can hide: local drift rate, rather than a single
 /// worst-point divergence.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct RpeStats {
     pub delta: usize,
     pub rmse: f64,

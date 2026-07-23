@@ -6,7 +6,7 @@
 /// `global_ba_seconds` and `loop_closure_seconds` are separate, one-shot
 /// batch passes not held to the same per-frame bar (see the plan's M5
 /// scope note).
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct TimingBreakdown {
     pub vision_seconds: f64,
     pub optimization_seconds: f64,

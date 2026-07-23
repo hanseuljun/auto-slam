@@ -66,7 +66,7 @@ pub fn umeyama_alignment(source: &[Vector3<f64>], target: &[Vector3<f64>]) -> Op
 
 /// Absolute Trajectory Error summary (RMSE/mean/median/std of per-point
 /// Euclidean error), after alignment.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct AteStats {
     pub rmse: f64,
     pub mean: f64,

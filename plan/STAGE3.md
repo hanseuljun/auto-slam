@@ -93,7 +93,7 @@ than re-parsing CSVs with new ad hoc code.
 Same discipline as Stages 1-2: each milestone lands as a working,
 tested increment, no big-bang integration at the end.
 
-### M0 — Multi-run output layout (small backend prerequisite)
+### M0 — Multi-run output layout (small backend prerequisite) — Done
 
 - `bin/slam-run` currently overwrites `runs/<sequence>/trajectory.csv`
   and `runs/summary.csv` on every invocation (confirmed in
@@ -112,6 +112,16 @@ tested increment, no big-bang integration at the end.
   run directories with correct `meta.json` contents; `cargo test`
   covering the run-id/metadata-writing logic directly (not just via a
   full pipeline run).
+- **Result**: landed as designed — `slam-eval::run_meta` (`RunConfig`/
+  `RunMeta`, `generate_run_id`, `current_git_commit`, JSON read/write),
+  `bin/slam-run` writes `runs/<sequence>/<run_id>/{trajectory.csv,
+  meta.json}` per invocation alongside the unchanged latest-snapshot
+  paths. 3 new `cargo test`s (`slam-eval` 16 -> 19); verified
+  non-clobbering by running `slam-run` on `MH_01_easy` twice and
+  confirming two distinct run directories, and re-ran the full
+  5-sequence harness to confirm ATE/RT-factor numbers are unchanged
+  from `docs/RESULTS.md`'s baseline. Full writeup: `memory/progress/
+  2026-07-23-stage3-m0-multi-run-history.md`.
 
 ### M1 — `slam-render`: rendering-library foundations
 
