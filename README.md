@@ -66,7 +66,8 @@ for a session-by-session log of what landed and when.
 | Stage 3 M3 | `bin/slam-viz` app shell + 3D panel, run picker | Done |
 | Stage 3 M4 | Video frame panel, synced to keyframe timestamps | Done |
 | Stage 3 M5 | Graphs panel (per-keyframe ATE + timing bar chart) | Done |
-| Stage 3 M6-M7 | Synced playback across panels, run-browser polish | Not started — see `plan/STAGE3.md` |
+| Stage 3 M6 | Synced playback (shared cursor across 3D/video/graphs) | Done |
+| Stage 3 M7 | Run-browser polish (multi-run comparison, optional) | Core already works via M0/M3 — see `plan/STAGE3.md` |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
@@ -265,6 +266,20 @@ behavior. RPE-over-time was deliberately scoped out rather than
 attempted alongside ATE — it would need the same "expose the series"
 treatment applied to a different function, recorded as a legitimate
 follow-up in `plan/STAGE3.md` rather than silently dropped.
+
+**Stage 3's M6** synced all three panels to one shared cursor — the
+video panel's own scrub position (already there since M4), now read by
+the 3D panel (highlights the matching keyframe with a crosshair marker)
+and the graphs panel (a vertical line on the ATE plot at that index).
+This turned out to be mostly wiring, not new data-model work: the
+video panel's timestamps, the 3D panel's trajectory points, and the
+graphs panel's ATE series were already built from the same source, row
+-for-row, so one shared index into all three *is* the sync mechanism,
+not a separate thing to keep consistent. With M0-M6 done, Stage 3's
+three goals are functionally met — a hand-written 3D rendering library,
+an app showing the trajectory next to synced video and graphs, and
+per-run browsing. M7 (run-browser polish, multi-run comparison) is
+polish on a working whole, not a missing capability.
 
 ## Building
 

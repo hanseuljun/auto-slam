@@ -60,6 +60,14 @@ impl VideoPlayer {
         Some(seq.nearest_cam0_frame_index(timestamp))
     }
 
+    /// The current playback position, in the same per-keyframe index
+    /// space as `timestamps`/`load_for_run` — the shared cursor `plan/
+    /// STAGE3.md` M6's synced playback reads to highlight the matching
+    /// position in the 3D and graphs panels too.
+    pub fn scrub_index(&self) -> usize {
+        self.scrub_index
+    }
+
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         ui.heading("Video");
         if let Some(err) = &self.error {

@@ -318,7 +318,7 @@ tested increment, no big-bang integration at the end.
   is actually using this panel, not attempted here to keep this
   milestone's scope matched to what was actually needed.
 
-### M6 — Synced playback across all three panels
+### M6 — Synced playback across all three panels — Done
 
 - One scrubber/time cursor drives all three panels together: the
   highlighted pose/frustum in the 3D view, the displayed video frame,
@@ -329,6 +329,36 @@ tested increment, no big-bang integration at the end.
   without rendering pixels, so it's a real `cargo test`, not just a
   manual check; manual visual confirmation that the panels are visibly
   in sync is the human-verification layer on top.
+- **Result**: the video panel's own `scrub_index` (M4) became the
+  single shared cursor — `VideoPlayer` gained a `scrub_index()`
+  accessor, and `App` reads it once per frame, *after* the video
+  panel's own `ui()` call has applied that frame's slider drag or
+  play-auto-advance, so every other panel drawn afterward sees the
+  up-to-date value. The 3D panel highlights `positions[cursor]` (a new
+  `LoadedTrajectory::positions` field — the estimated trajectory's raw
+  world-space points, same index space as `timestamps`/`ate_series`)
+  with a bright-yellow crosshair marker, added to a cheap per-frame
+  `Scene` clone rather than mutating the persistent scene (so the
+  highlight moves without leaving stale markers behind or requiring a
+  reload every frame). The graphs panel draws an `egui_plot::VLine` at
+  `cursor` on the ATE plot. The video panel already translates
+  `cursor -> timestamps[cursor] -> nearest cam0 frame` (M4's own
+  tested lookup) — no new translation logic needed there.
+- **Why the "consistency" test claim holds by construction, not by a
+  separate cross-check**: `positions`, `timestamps`, and `ate_series`
+  are all built from the same `slam_eval::TrajectoryPoints` in
+  `load_run_scene`, one field per CSV column, so they're guaranteed
+  equal length and row-aligned — the same `cursor` integer indexing all
+  three (directly for position/ATE, through the existing timestamp
+  lookup for video) *is* the sync mechanism, not a separate thing that
+  could drift out of alignment. `scene_load.rs`'s existing test already
+  asserts all three have length `n` and spot-checks `positions`' first/
+  last values against the known fixture trajectory — extended this
+  milestone rather than duplicated with a parallel "sync" test, since a
+  parallel test would just be re-checking the same construction.
+  `cargo clippy --workspace` clean; windowed visual confirmation of the
+  actual highlight/cursor-line motion needs the user's own `cargo run`,
+  same as every prior interactive-half item.
 
 ### M7 — Run browser polish: this is goal 3's actual delivery
 

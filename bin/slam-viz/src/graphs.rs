@@ -1,4 +1,4 @@
-use egui_plot::{Bar, BarChart, Line, Plot, PlotPoints};
+use egui_plot::{Bar, BarChart, Line, Plot, PlotPoints, VLine};
 
 /// `plan/STAGE3.md` M5's graphs panel: per-keyframe ATE over the run,
 /// plus a per-stage timing breakdown bar chart. `egui_plot` renders the
@@ -21,7 +21,11 @@ impl GraphsPanel {
         self.timing = timing;
     }
 
-    pub fn ui(&self, ui: &mut egui::Ui) {
+    /// `cursor_index` is the shared playback position (`plan/STAGE3.md`
+    /// M6, driven by the video panel's own scrub index) — drawn as a
+    /// vertical line on the ATE plot so all three panels visibly track
+    /// the same instant, not just the video and 3D panels.
+    pub fn ui(&self, ui: &mut egui::Ui, cursor_index: Option<usize>) {
         ui.heading("Graphs");
         if self.ate_series.is_empty() {
             ui.label("No run selected.");
@@ -32,6 +36,9 @@ impl GraphsPanel {
         let points: PlotPoints = self.ate_series.iter().enumerate().map(|(i, &e)| [i as f64, e]).collect();
         Plot::new("slam-viz-ate-plot").height(180.0).show(ui, |plot_ui| {
             plot_ui.line(Line::new(points).name("ATE"));
+            if let Some(cursor) = cursor_index {
+                plot_ui.vline(VLine::new(cursor as f64).name("cursor"));
+            }
         });
 
         if let Some(t) = self.timing {

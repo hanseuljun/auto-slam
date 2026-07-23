@@ -26,6 +26,12 @@ pub struct LoadedTrajectory {
     /// panel treats that the same as "no run selected" rather than
     /// erroring the whole load over a plot that just can't be drawn.
     pub ate_series: Vec<f64>,
+    /// The estimated trajectory's own world-space positions, same
+    /// order/index space as `timestamps`/`ate_series` — lets `App`
+    /// highlight "the keyframe at the current cursor" in the 3D panel
+    /// (`plan/STAGE3.md` M6's synced playback) without re-parsing
+    /// `trajectory.csv` on every frame just to look up one point.
+    pub positions: Vec<Point3<f64>>,
 }
 
 /// The actual "data adapter" `plan/STAGE3.md` M2 originally scoped
@@ -61,7 +67,7 @@ pub fn load_run_scene(run_dir: &Path) -> anyhow::Result<LoadedTrajectory> {
         scene.add_pose_marker(&SE3::new(SO3::identity(), estimated[i].coords), marker_scale, [0.8, 0.8, 0.8]);
     }
 
-    Ok(LoadedTrajectory { scene, center, extent, timestamps: points.timestamps, ate_series })
+    Ok(LoadedTrajectory { scene, center, extent, timestamps: points.timestamps, ate_series, positions: estimated })
 }
 
 /// Axis-aligned bounding box center + diagonal extent, used to frame the
@@ -126,6 +132,10 @@ mod tests {
         // (plan/STAGE3.md M5).
         assert_eq!(loaded.ate_series.len(), n);
         assert!(loaded.ate_series.iter().all(|&e| e < 1e-9), "identical estimated/groundtruth trajectories must give ~zero ATE at every point, got {:?}", loaded.ate_series);
+
+        assert_eq!(loaded.positions.len(), n);
+        assert!((loaded.positions[0] - Point3::origin()).norm() < 1e-9);
+        assert!((loaded.positions[n - 1] - Point3::new(10.0, 0.0, 0.0)).norm() < 1e-9);
 
         std::fs::remove_dir_all(&dir).ok();
     }

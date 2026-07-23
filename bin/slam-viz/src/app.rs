@@ -32,6 +32,12 @@ pub struct App {
     camera: OrbitCamera,
     video: VideoPlayer,
     graphs: GraphsPanel,
+    /// The estimated trajectory's own world-space positions for the
+    /// currently loaded run, same index space as the video panel's
+    /// `scrub_index` — `plan/STAGE3.md` M6's synced-cursor highlight in
+    /// the 3D panel reads this rather than re-loading `trajectory.csv`
+    /// every frame.
+    positions: Vec<Point3<f64>>,
 }
 
 impl App {
@@ -43,7 +49,7 @@ impl App {
         let video = VideoPlayer::new(data_dir);
         let graphs = GraphsPanel::default();
 
-        let mut app = App { runs_dir, runs: Vec::new(), selected_dir: None, error: None, gpu, offscreen, renderer, scene: Scene::new(), camera, video, graphs };
+        let mut app = App { runs_dir, runs: Vec::new(), selected_dir: None, error: None, gpu, offscreen, renderer, scene: Scene::new(), camera, video, graphs, positions: Vec::new() };
         app.refresh_runs();
         if let Some(first) = app.runs.first().cloned() {
             app.select_run(&first);
@@ -63,6 +69,7 @@ impl App {
             Ok(loaded) => {
                 self.video.load_for_run(&run.meta.sequence_name, loaded.timestamps.clone());
                 self.graphs.load_for_run(loaded.ate_series.clone(), run.meta.timing);
+                self.positions = loaded.positions;
                 self.scene = loaded.scene;
                 self.camera.target = loaded.center;
                 self.camera.distance = (loaded.extent * 1.5).max(1.0);
@@ -112,7 +119,18 @@ impl App {
             self.camera.aspect = width as f64 / height as f64;
         }
 
-        self.renderer.render(&self.gpu, &self.scene, &self.camera.view_projection_matrix(), self.offscreen.color_view(), self.offscreen.depth_view(), wgpu::Color { r: 0.05, g: 0.05, b: 0.08, a: 1.0 });
+        // A cheap per-frame clone (a few hundred vertices at most) rather
+        // than mutating `self.scene` permanently: the cursor highlight
+        // (`plan/STAGE3.md` M6's synced playback) needs to move every
+        // frame the video panel's scrub position changes, without
+        // re-loading the run or leaving stale highlight markers behind
+        // from a previous cursor position.
+        let mut frame_scene = self.scene.clone();
+        if let Some(&cursor_pos) = self.positions.get(self.video.scrub_index()) {
+            frame_scene.add_point_marker(&cursor_pos, self.camera.distance * 0.02, [1.0, 1.0, 0.0]);
+        }
+
+        self.renderer.render(&self.gpu, &frame_scene, &self.camera.view_projection_matrix(), self.offscreen.color_view(), self.offscreen.depth_view(), wgpu::Color { r: 0.05, g: 0.05, b: 0.08, a: 1.0 });
         let pixels = self.offscreen.read_pixels_rgba8(&self.gpu);
         let image = egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], &pixels);
         let texture = ui.ctx().load_texture("slam-viz-3d-view", image, egui::TextureOptions::LINEAR);
@@ -137,7 +155,12 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::SidePanel::left("run_picker").min_width(240.0).show(ctx, |ui| self.run_picker(ui));
         egui::SidePanel::right("video_panel").min_width(320.0).show(ctx, |ui| self.video.ui(ui));
-        egui::TopBottomPanel::bottom("graphs_panel").min_height(220.0).show(ctx, |ui| self.graphs.ui(ui));
+        // Reads video's scrub_index *after* its own ui() call above has
+        // already applied this frame's slider drag/play-advance, so the
+        // graphs panel's cursor line and the 3D panel's highlight below
+        // both reflect the same up-to-date instant (`plan/STAGE3.md` M6).
+        let cursor = self.video.scrub_index();
+        egui::TopBottomPanel::bottom("graphs_panel").min_height(220.0).show(ctx, |ui| self.graphs.ui(ui, Some(cursor)));
         egui::CentralPanel::default().show(ctx, |ui| self.trajectory_view(ui));
     }
 }
