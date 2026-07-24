@@ -123,24 +123,22 @@ const RPE_DELTAS: &[usize] = &[1, 10];
 const ALIGN_PREFIX_SECONDS: f64 = 30.0;
 
 /// Capture a loop-closure keyframe every `LOOP_CLOSURE_CAPTURE_STRIDE`-th
-/// VIO keyframe, not every one (`plan/STAGE5.md` M2, `memory/
-/// decisions/0021`) — VIO keyframes are far denser than loop detection
-/// needs (up to 741 on `MH_01_easy`'s full run, track-loss recovery
-/// included, `plan/STAGE4.md` M2), and capturing (let alone pose-graph-
-/// optimizing) at that density measurably broke the real-time bar (590s+
-/// of loop-closure cost on one sequence alone at stride 1). A real,
-/// measured tradeoff, not an arbitrary pick: stride 4 (~185 nodes) costs
-/// ~23s and holds the real-time bar (whole-run factor 0.85 on
-/// `MH_01_easy`) but leaves real, visible RPE degradation from the
-/// smooth-interpolation correction (delta=1 rmse 0.16m -> 0.86m); stride 2
-/// (~370 nodes) roughly halves that RPE hit (-> 0.51m) but costs 88s and
-/// *breaks* the real-time bar (whole-run factor 1.21). The real-time bar
-/// is the non-negotiable one here (`plan/STAGE4.md`'s own hard-won
-/// constraint, and this stage's own Risks section's explicit warning
-/// against reopening that exact wound) — 4 is the choice, and the RPE
-/// tradeoff is a documented, open limitation (`memory/decisions/0021`),
-/// not a hidden one.
-const LOOP_CLOSURE_CAPTURE_STRIDE: usize = 4;
+/// VIO keyframe. `plan/STAGE5.md` M2 originally set this to 4 because the
+/// dense pose graph's own O(n^3) solve (`optimize_pose_graph`, pre-
+/// `plan/STAGE6.md` M3) made capturing at full density (up to 741 nodes
+/// on `MH_01_easy`'s full run) cost 590s+ on one sequence alone.
+/// `plan/STAGE6.md` M3 replaced that solve with a sparse one (~97ms on a
+/// 741-node graph, measured — `memory/decisions/0025`), so M4 re-measured
+/// this constant directly rather than assuming 1 (every VIO keyframe, no
+/// downsampling) now costs nothing: stride 1 measurably *breaks* the
+/// real-time bar on `MH_01_easy` (whole-run factor 1.082) — the pose-
+/// graph solve is cheap now, but BoW vocabulary training and place-
+/// recognition queries still scale with keyframe count, and at stride 1
+/// that's ~4x the descriptors/queries stride 4 had. Stride 2 holds the
+/// bar on all 5 sequences (0.822-0.925) with real, substantial
+/// gap-closure improvements over stride 4 on most sequences — the
+/// measured, not guessed, choice (`memory/decisions/0026`).
+const LOOP_CLOSURE_CAPTURE_STRIDE: usize = 2;
 
 fn run_sequence(seq_dir: &Path, out_dir: &Path, frame_cap: Option<usize>, run_id: &str, git_commit: Option<&str>) -> anyhow::Result<Option<slam_eval::TrajectoryReport>> {
     let name = seq_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| seq_dir.display().to_string());

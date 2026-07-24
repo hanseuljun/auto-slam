@@ -319,6 +319,26 @@ re-measures on all 5 sequences, bounded and full, both ATE metrics.
   directly, since this is exactly the kind of change that could quietly
   regress it if the new solver's own cost scales worse than expected at
   higher density.
+- **Result**: tried stride 1 first, measured (not guessed) it *breaks*
+  the real-time bar on `MH_01_easy` (whole-run factor 1.082) — M3's
+  sparse solver made the pose-graph solve itself cheap, but BoW
+  vocabulary training and place-recognition queries still scale with
+  capture density and dominate at stride 1 (~4x the descriptors/queries
+  stride 4 had). Stride 2 holds the bar on all 5 sequences (0.640-0.925).
+  Geometric gap-closure ratio improves dramatically on most sequences
+  (`MH_01`: 4.4x -> 43.7x, `MH_02`: 1.1x -> 12.2x, `MH_05`: 1.6x -> 5.6x
+  — `MH_01`/`MH_02` now well past the "order of magnitude" bar `plan/
+  STAGE5.md` M3 didn't reach), though `MH_04` is a genuine exception (a
+  *different* candidate is found at stride 2 and the geometric gate
+  correctly rejects it — not a gate bug). RPE delta=1 does *not* show a
+  clean, uniform fix of `decisions/0021`'s ~5x interpolation-artifact
+  degradation at stride 2 (mixed, no consistent direction across
+  sequences) — measured directly at stride 1 (before rejecting it for
+  the real-time reason) that the interpolation-artifact explanation is
+  directionally right (0.347m there, better than stride 2 or 4), so a
+  future fix of the vocabulary/place-recognition cost specifically could
+  still reach stride 1 and a cleaner RPE win. Full numbers, honestly
+  including the mixed parts: `memory/decisions/0026`.
 
 ### M5 — Goal 3: instrument and directly measure scale drift over a run
 

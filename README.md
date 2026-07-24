@@ -24,14 +24,15 @@ start is now honest (a new prefix-aligned metric that doesn't let later
 drift mask early accuracy) and loop closure is chained into
 `bin/slam-run`'s real pipeline on every sequence, gated on a real
 geometric check — see [`docs/RESULTS.md`](docs/RESULTS.md)'s "Loop
-closure and honest ATE" section. **Stage 6 (in progress, M0-M3 done)**
+closure and honest ATE" section. **Stage 6 (in progress, M0-M4 done)**
 is closing the remaining accuracy gap an HTML diagnostic surfaced:
 analytic IMU Jacobians landed (M1, a real but mostly negative accuracy
 effect, kept anyway), real preintegration covariance propagation was
 tried as solver weighting, measured a severe regression, and reverted
-(M2), and a hand-rolled sparse pose-graph solver replaced loop
-closure's dense O(n^3) correction ceiling (M3) — see
-`memory/decisions/0023`/`0024`/`0025`. [`plan/STAGE1.md`](plan/STAGE1.md),
+(M2), a hand-rolled sparse pose-graph solver replaced loop closure's
+dense O(n^3) correction ceiling (M3), and loop-closure capture density
+doubled (M4, measured to hold the real-time bar with real gap-closure
+gains) — see `memory/decisions/0023`/`0024`/`0025`/`0026`. [`plan/STAGE1.md`](plan/STAGE1.md),
 [`plan/STAGE2.md`](plan/STAGE2.md), and
 [`plan/STAGE3.md`](plan/STAGE3.md) are all done and worth reading for
 that history.
@@ -69,14 +70,17 @@ existing whole-trajectory alignment let a bad ending mask a good
 beginning), and because every `machine_hall` sequence returns near its
 own starting point yet loop closure — real, tested code since Stage 1
 M7 — was never wired into the pipeline `bin/slam-run` actually reports
-numbers for. **Stage 6** (in progress, M0-M3 done) exists because an
+numbers for. **Stage 6** (in progress, M0-M4 done) exists because an
 HTML diagnostic built after Stage 5 found the accuracy gap against
 published stereo-inertial SLAM systems was still 90-280x worse than
 state of the art across 4 layers; M1/M2 tackled the first layer (real
 analytic Jacobians + real covariance propagation for the IMU factor),
 both landing with real, honestly-measured accuracy effects rather than
-the expected "transparent improvement," and M3 tackled the second layer
-(the sparse solver removing loop closure's own correction ceiling). See [`plan/STAGE1.md`](plan/STAGE1.md),
+the expected "transparent improvement," M3 tackled the second layer
+(the sparse solver removing loop closure's own correction ceiling), and
+M4 spent that removed ceiling (measured, not guessed, that stride 1
+itself breaks the real-time bar via a different bottleneck, so stride 2
+is the real answer). See [`plan/STAGE1.md`](plan/STAGE1.md),
 [`plan/STAGE2.md`](plan/STAGE2.md), [`plan/STAGE3.md`](plan/STAGE3.md),
 [`plan/STAGE4.md`](plan/STAGE4.md), and [`plan/STAGE5.md`](plan/STAGE5.md)
 for the full milestone lists and [`memory/progress/`](memory/progress/)
@@ -118,7 +122,8 @@ for a session-by-session log of what landed and when.
 | Stage 6 M1 | Analytic IMU Jacobians (replacing numerical) | **Done — correct, but a real (mostly negative) accuracy effect found and kept, see `memory/decisions/0023`** |
 | Stage 6 M2 | Real preintegration covariance propagation as solver weighting | **Done — tried, measured a real regression (up to +101% ATE), reverted; see `memory/decisions/0024`** |
 | Stage 6 M3 | Sparse pose-graph solver (removes loop closure's O(n^3) ceiling) | **Done — hand-rolled block-tridiagonal + Woodbury solver, ~97ms vs. 10+ min on a 741-node graph, see `memory/decisions/0025`** |
-| Stage 6 M4 | Reduce loop-closure stride, re-verify real-time bar | In progress |
+| Stage 6 M4 | Reduce loop-closure stride, re-verify real-time bar | **Done — stride 1 broke the bar (vocab/place-recognition cost), stride 2 holds it with dramatic gap-closure gains on most sequences, see `memory/decisions/0026`** |
+| Stage 6 M5 | Instrument and measure scale drift over a run | In progress |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
@@ -500,6 +505,20 @@ test missed entirely. Measured wall-clock on a synthetic 741-node graph
 matching `MH_01_easy`'s exact size: ~97ms for 50 LM iterations, several
 orders of magnitude under the old solver's non-completion. Full numbers:
 `memory/decisions/0025`.
+
+**Stage 6's M4**: with M3's cheap solver, tried reducing `LOOP_CLOSURE_
+CAPTURE_STRIDE` back to 1 (every VIO keyframe) — measured (not guessed)
+that this *breaks* the real-time bar on `MH_01_easy` (whole-run factor
+1.082): the pose-graph solve itself is cheap now, but BoW vocabulary
+training and place-recognition queries still scale with capture density
+and dominate at full density. Stride 2 holds the bar on all 5 sequences
+(0.640-0.925) with substantial gap-closure gains on most (`MH_01`:
+4.4x -> 43.7x, `MH_02`: 1.1x -> 12.2x — both now well past `plan/
+STAGE5.md` M3's own "order of magnitude" bar), though `MH_04` is a
+genuine exception (a different loop candidate is found and the geometric
+gate correctly rejects it) and RPE delta=1 shows a mixed, not uniformly
+improved, effect — documented honestly rather than only reporting the
+favorable numbers. Full details: `memory/decisions/0026`.
 
 ## Building
 
