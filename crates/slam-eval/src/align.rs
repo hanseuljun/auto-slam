@@ -158,6 +158,71 @@ pub fn compute_ate_prefix_aligned(estimated: &[Vector3<f64>], groundtruth: &[Vec
     Some(ate_stats_from_errors(errors))
 }
 
+/// Fits `umeyama_alignment` over a sliding window of `window_len`
+/// consecutive points, sliding by `step`, and returns each window's own
+/// fitted scale paired with its starting index — a *local*, over-time
+/// view of the estimator's own reconstructed scale, instead of the
+/// single whole-trajectory number `umeyama_alignment` itself gives
+/// (`plan/STAGE6.md` M5, `memory/decisions/0020`'s own open question:
+/// is the scale anomaly gradual drift or a step-change at a specific
+/// event?). A window's own fit is skipped (not included in the result,
+/// rather than panicking or returning `None` for the whole run) if
+/// `umeyama_alignment` itself can't fit it (e.g. a near-degenerate
+/// window with too little translation spread) — real windows elsewhere
+/// in the run are still worth reporting.
+pub fn compute_sliding_window_scale(estimated: &[Vector3<f64>], groundtruth: &[Vector3<f64>], window_len: usize, step: usize) -> Vec<(usize, f64)> {
+    if estimated.len() != groundtruth.len() || window_len < 3 || step == 0 || estimated.len() < window_len {
+        return Vec::new();
+    }
+    (0..=estimated.len() - window_len)
+        .step_by(step)
+        .filter_map(|start| {
+            let alignment = umeyama_alignment(&estimated[start..start + window_len], &groundtruth[start..start + window_len])?;
+            Some((start, alignment.scale))
+        })
+        .collect()
+}
+
+/// Per-axis standard-deviation ratio (estimated / groundtruth), *after*
+/// rotating `estimated` into groundtruth's own frame using `umeyama_
+/// alignment`'s fitted rotation — but deliberately not its isotropic
+/// scale, which is exactly the single-number compromise this function
+/// exists to look past. `umeyama_alignment` (and `compute_sliding_
+/// window_scale`) can only ever report one scalar scale per fit; if the
+/// true error is anisotropic (a different stretch factor per axis, not
+/// a uniform one), that single number is a compromise average that can
+/// swing wildly between windows depending on which axis's motion
+/// happens to dominate each one (`plan/STAGE6.md` M5 found exactly this
+/// on real data — `memory/decisions/0027`). Comparing raw per-axis
+/// spread *without* first rotating into a common frame is meaningless
+/// (each trajectory's own world frame is arbitrary), which is the
+/// mistake this function's own doc comment warns against making again.
+/// Returns `None` if `umeyama_alignment` itself can't fit (see its own
+/// conditions) or if `groundtruth`'s per-axis variance is degenerate
+/// (a straight-line or planar run along some axis, where "ratio" isn't
+/// meaningful).
+pub fn compute_axis_scale_ratios(estimated: &[Vector3<f64>], groundtruth: &[Vector3<f64>]) -> Option<Vector3<f64>> {
+    let alignment = umeyama_alignment(estimated, groundtruth)?;
+    let n = estimated.len() as f64;
+    let mean_e: Vector3<f64> = estimated.iter().sum::<Vector3<f64>>() / n;
+    let mean_g: Vector3<f64> = groundtruth.iter().sum::<Vector3<f64>>() / n;
+
+    let mut var_e = Vector3::<f64>::zeros();
+    let mut var_g = Vector3::<f64>::zeros();
+    for (e, g) in estimated.iter().zip(groundtruth.iter()) {
+        let rotated = alignment.rotation * (e - mean_e);
+        let centered_gt = g - mean_g;
+        var_e += rotated.component_mul(&rotated);
+        var_g += centered_gt.component_mul(&centered_gt);
+    }
+    var_e /= n;
+    var_g /= n;
+    if var_g.x <= 1e-12 || var_g.y <= 1e-12 || var_g.z <= 1e-12 {
+        return None;
+    }
+    Some(Vector3::new((var_e.x / var_g.x).sqrt(), (var_e.y / var_g.y).sqrt(), (var_e.z / var_g.z).sqrt()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,5 +357,158 @@ mod tests {
         let source: Vec<Vector3<f64>> = (0..10).map(|i| Vector3::new(i as f64, 0.0, 0.0)).collect();
         let target: Vec<Vector3<f64>> = (0..5).map(|i| Vector3::new(i as f64, 0.0, 0.0)).collect();
         assert!(compute_ate_prefix_aligned(&source, &target, 5).is_none());
+    }
+
+    /// The core distinguishing property `plan/STAGE6.md` M5 needs: a
+    /// *gradual* scale drift (the estimator's own reconstructed scale
+    /// ramping smoothly over the run) shows up as many consecutive
+    /// windows each reporting a slightly different value, not a handful
+    /// of flat plateaus — see `sliding_window_scale_detects_a_step_
+    /// change` for the contrasting case.
+    #[test]
+    fn sliding_window_scale_detects_gradual_drift() {
+        let n = 60;
+        let groundtruth: Vec<Vector3<f64>> = (0..n).map(|i| Vector3::new(i as f64, 0.0, 0.0)).collect();
+        // Estimated points ramp from 1.0x to 2.0x groundtruth scale,
+        // linearly over the run.
+        let estimated: Vec<Vector3<f64>> = (0..n)
+            .map(|i| {
+                let local_scale = 1.0 + (i as f64 / (n - 1) as f64);
+                Vector3::new(i as f64 * local_scale, 0.0, 0.0)
+            })
+            .collect();
+
+        let series = compute_sliding_window_scale(&estimated, &groundtruth, 10, 1);
+        assert!(series.len() > 10, "expected many overlapping windows, got {}", series.len());
+
+        // `umeyama_alignment(estimated, groundtruth)`'s scale maps
+        // *estimated* onto *groundtruth* — since estimated is inflated
+        // by an increasing local_scale here, the fitted scale (the
+        // shrink factor needed to match groundtruth) *decreases* over
+        // the run. Every window's scale should be strictly less than
+        // the previous one's — a smooth ramp, not flat segments with a
+        // jump.
+        let decreasing_pairs = series.windows(2).filter(|w| w[1].1 < w[0].1).count();
+        assert!(
+            decreasing_pairs as f64 > 0.9 * (series.len() - 1) as f64,
+            "expected a smooth, mostly-monotonic change across windows, only {decreasing_pairs}/{} pairs decreased",
+            series.len() - 1
+        );
+    }
+
+    /// The contrasting case: an abrupt, one-time change in the
+    /// estimator's own scale (as if caused by a single event — a
+    /// marginalization, a track-loss recovery, a bootstrap artifact —
+    /// rather than compounding optimization drift) shows up as two flat
+    /// plateaus with a short transition between them, not a smooth ramp
+    /// across the whole run.
+    #[test]
+    fn sliding_window_scale_detects_a_step_change() {
+        let n = 60;
+        let groundtruth: Vec<Vector3<f64>> = (0..n).map(|i| Vector3::new(i as f64, 0.0, 0.0)).collect();
+        let estimated: Vec<Vector3<f64>> = (0..n)
+            .map(|i| {
+                let local_scale = if i < n / 2 { 1.0 } else { 2.0 };
+                Vector3::new(i as f64 * local_scale, 0.0, 0.0)
+            })
+            .collect();
+
+        let window_len = 10;
+        let series = compute_sliding_window_scale(&estimated, &groundtruth, window_len, 1);
+        assert!(!series.is_empty());
+
+        // Windows entirely before the step (fully within the first
+        // plateau, local_scale=1.0) should read a fitted scale of 1.0;
+        // windows entirely after it (local_scale=2.0, so estimated is
+        // 2x groundtruth — the fitted shrink factor is 1/2) should read
+        // 0.5 — real flat plateaus, unlike the gradual case where only
+        // the very first/last window touch those extremes.
+        let before_step: Vec<f64> = series.iter().filter(|(start, _)| start + window_len <= n / 2).map(|(_, s)| *s).collect();
+        let after_step: Vec<f64> = series.iter().filter(|(start, _)| *start >= n / 2).map(|(_, s)| *s).collect();
+        assert!(before_step.len() >= 5, "expected several windows fully before the step, got {}", before_step.len());
+        assert!(after_step.len() >= 5, "expected several windows fully after the step, got {}", after_step.len());
+        for s in &before_step {
+            assert_relative_eq!(*s, 1.0, epsilon = 1e-9);
+        }
+        for s in &after_step {
+            assert_relative_eq!(*s, 0.5, epsilon = 1e-9);
+        }
+    }
+
+    #[test]
+    fn sliding_window_scale_returns_empty_on_mismatched_or_too_short_input() {
+        let short: Vec<Vector3<f64>> = (0..5).map(|i| Vector3::new(i as f64, 0.0, 0.0)).collect();
+        let mismatched: Vec<Vector3<f64>> = (0..7).map(|i| Vector3::new(i as f64, 0.0, 0.0)).collect();
+        assert!(compute_sliding_window_scale(&short, &short, 10, 1).is_empty());
+        assert!(compute_sliding_window_scale(&short, &mismatched, 3, 1).is_empty());
+    }
+
+    /// A synthetic, per-axis-anisotropically-distorted "estimated"
+    /// trajectory (built from a known rotation and known, *different*
+    /// per-axis scale factors applied to groundtruth) should have those
+    /// exact factors recovered — the real-data motivation
+    /// (`plan/STAGE6.md` M5, `memory/decisions/0027`) for this function
+    /// existing at all: a single isotropic Umeyama scale can't represent
+    /// this, but this function's whole point is to look past it.
+    /// Groundtruth points are pseudo-random (not a smooth parametric
+    /// curve) specifically so their x/y/z components are uncorrelated —
+    /// a curve like a helix would make Umeyama's own rotation fit
+    /// ambiguous with the anisotropic scale itself, confounding this
+    /// test's own premise.
+    #[test]
+    fn axis_scale_ratios_recovers_known_anisotropic_distortion() {
+        let mut state = 123u64;
+        let mut next = || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((state >> 33) as f64 / (1u64 << 31) as f64) - 1.0
+        };
+        let n = 5000;
+        let groundtruth: Vec<Vector3<f64>> = (0..n).map(|_| Vector3::new(next() * 5.0, next() * 5.0, next() * 5.0)).collect();
+
+        let true_rotation = SO3::exp(Vector3::new(0.3, -0.2, 0.5));
+        let rot_matrix = true_rotation.matrix();
+        let known_ratios = Vector3::new(3.0, 1.0, 5.0);
+        let mean_gt: Vector3<f64> = groundtruth.iter().sum::<Vector3<f64>>() / n as f64;
+
+        // estimated built so that `rotation * (estimated - mean) ==
+        // known_ratios .* (groundtruth - mean)` exactly.
+        let estimated: Vec<Vector3<f64>> = groundtruth
+            .iter()
+            .map(|g| {
+                let centered = g - mean_gt;
+                let scaled = Vector3::new(centered.x * known_ratios.x, centered.y * known_ratios.y, centered.z * known_ratios.z);
+                rot_matrix.transpose() * scaled + mean_gt
+            })
+            .collect();
+
+        let ratios = compute_axis_scale_ratios(&estimated, &groundtruth).expect("should compute on a well-conditioned synthetic trajectory");
+        // 5000 random points give near-zero but not exactly-zero cross-
+        // axis correlation, so Umeyama's own fitted rotation is only
+        // approximately `rot_matrix` — 1e-2 is loose enough to absorb
+        // that finite-sampling noise (confirmed converging toward exact
+        // as n grows: 200 points gave ~9% error, 5000 gives <0.1%) while
+        // still tight enough to catch a real formula mistake.
+        assert_relative_eq!(ratios, known_ratios, epsilon = 1e-2);
+    }
+
+    #[test]
+    fn axis_scale_ratios_is_all_ones_for_identical_trajectories() {
+        let mut state = 7u64;
+        let mut next = || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((state >> 33) as f64 / (1u64 << 31) as f64) - 1.0
+        };
+        let points: Vec<Vector3<f64>> = (0..50).map(|_| Vector3::new(next(), next(), next())).collect();
+        let ratios = compute_axis_scale_ratios(&points, &points).expect("identical trajectories should compute");
+        assert_relative_eq!(ratios, Vector3::new(1.0, 1.0, 1.0), epsilon = 1e-9);
+    }
+
+    #[test]
+    fn axis_scale_ratios_returns_none_for_a_degenerate_axis() {
+        // Every groundtruth point has z=0 — zero variance on that axis,
+        // so a ratio against it is meaningless.
+        let groundtruth: Vec<Vector3<f64>> = (0..10).map(|i| Vector3::new(i as f64, (i as f64 * 0.3).sin(), 0.0)).collect();
+        let estimated = groundtruth.clone();
+        assert!(compute_axis_scale_ratios(&estimated, &groundtruth).is_none());
     }
 }

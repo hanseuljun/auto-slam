@@ -24,15 +24,17 @@ start is now honest (a new prefix-aligned metric that doesn't let later
 drift mask early accuracy) and loop closure is chained into
 `bin/slam-run`'s real pipeline on every sequence, gated on a real
 geometric check — see [`docs/RESULTS.md`](docs/RESULTS.md)'s "Loop
-closure and honest ATE" section. **Stage 6 (in progress, M0-M4 done)**
+closure and honest ATE" section. **Stage 6 (in progress, M0-M5 done)**
 is closing the remaining accuracy gap an HTML diagnostic surfaced:
 analytic IMU Jacobians landed (M1, a real but mostly negative accuracy
 effect, kept anyway), real preintegration covariance propagation was
 tried as solver weighting, measured a severe regression, and reverted
 (M2), a hand-rolled sparse pose-graph solver replaced loop closure's
-dense O(n^3) correction ceiling (M3), and loop-closure capture density
+dense O(n^3) correction ceiling (M3), loop-closure capture density
 doubled (M4, measured to hold the real-time bar with real gap-closure
-gains) — see `memory/decisions/0023`/`0024`/`0025`/`0026`. [`plan/STAGE1.md`](plan/STAGE1.md),
+gains), and real diagnostic instrumentation found the scale anomaly is
+anisotropic per-axis distortion, not simple gradual or step-change drift
+(M5) — see `memory/decisions/0023`/`0024`/`0025`/`0026`/`0027`. [`plan/STAGE1.md`](plan/STAGE1.md),
 [`plan/STAGE2.md`](plan/STAGE2.md), and
 [`plan/STAGE3.md`](plan/STAGE3.md) are all done and worth reading for
 that history.
@@ -70,7 +72,7 @@ existing whole-trajectory alignment let a bad ending mask a good
 beginning), and because every `machine_hall` sequence returns near its
 own starting point yet loop closure — real, tested code since Stage 1
 M7 — was never wired into the pipeline `bin/slam-run` actually reports
-numbers for. **Stage 6** (in progress, M0-M4 done) exists because an
+numbers for. **Stage 6** (in progress, M0-M5 done) exists because an
 HTML diagnostic built after Stage 5 found the accuracy gap against
 published stereo-inertial SLAM systems was still 90-280x worse than
 state of the art across 4 layers; M1/M2 tackled the first layer (real
@@ -80,7 +82,9 @@ the expected "transparent improvement," M3 tackled the second layer
 (the sparse solver removing loop closure's own correction ceiling), and
 M4 spent that removed ceiling (measured, not guessed, that stride 1
 itself breaks the real-time bar via a different bottleneck, so stride 2
-is the real answer). See [`plan/STAGE1.md`](plan/STAGE1.md),
+is the real answer), and M5's own instrumentation found the "scale
+anomaly" question itself was underspecified — the real signal is
+per-axis anisotropy, not a scalar drifting gradually or in one step. See [`plan/STAGE1.md`](plan/STAGE1.md),
 [`plan/STAGE2.md`](plan/STAGE2.md), [`plan/STAGE3.md`](plan/STAGE3.md),
 [`plan/STAGE4.md`](plan/STAGE4.md), and [`plan/STAGE5.md`](plan/STAGE5.md)
 for the full milestone lists and [`memory/progress/`](memory/progress/)
@@ -123,7 +127,8 @@ for a session-by-session log of what landed and when.
 | Stage 6 M2 | Real preintegration covariance propagation as solver weighting | **Done — tried, measured a real regression (up to +101% ATE), reverted; see `memory/decisions/0024`** |
 | Stage 6 M3 | Sparse pose-graph solver (removes loop closure's O(n^3) ceiling) | **Done — hand-rolled block-tridiagonal + Woodbury solver, ~97ms vs. 10+ min on a 741-node graph, see `memory/decisions/0025`** |
 | Stage 6 M4 | Reduce loop-closure stride, re-verify real-time bar | **Done — stride 1 broke the bar (vocab/place-recognition cost), stride 2 holds it with dramatic gap-closure gains on most sequences, see `memory/decisions/0026`** |
-| Stage 6 M5 | Instrument and measure scale drift over a run | In progress |
+| Stage 6 M5 | Instrument and measure scale drift over a run | **Done — scale error is anisotropic, not gradual/step (Z axis worst on both tested sequences), reframing the question, see `memory/decisions/0027`** |
+| Stage 6 M6 | Test the IMU-vs-vision residual weighting hypothesis | In progress |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
@@ -519,6 +524,27 @@ genuine exception (a different loop candidate is found and the geometric
 gate correctly rejects it) and RPE delta=1 shows a mixed, not uniformly
 improved, effect — documented honestly rather than only reporting the
 favorable numbers. Full details: `memory/decisions/0026`.
+
+**Stage 6's M5**: built `compute_sliding_window_scale` (`slam-eval`) to
+measure `decisions/0020`'s scale anomaly directly instead of by more
+reasoning about it — fits Umeyama over a sliding window, giving a local,
+over-time scale instead of one whole-trajectory number. On `MH_01_easy`
+this swung wildly and non-monotonically (0.016 to 0.228), not a clean
+gradual ramp or a step — confirmed not a window-size or loop-closure
+artifact (same wave shape at 20s/60s/90s windows, pre- and post-
+correction). Investigating why found the real, more fundamental answer:
+the error isn't isotropic at all. `compute_axis_scale_ratios` (rotates
+estimated into groundtruth's own frame first, then compares per-axis
+variance) measured real anisotropy on 2 sequences — `MH_01_easy` x=3.95
+y=2.74 **z=14.03**, `MH_04_difficult` x=1.12 y=1.60 **z=2.10** — Z is the
+worst axis on both. A single isotropic scalar was never the right thing
+to track; the sliding-window noise is the symptom of fitting one number
+to an inherently anisotropic problem. Also found `MH_01`'s better ATE
+coexists with 7x *worse* anisotropic distortion than `MH_04`'s — the
+isotropic ATE metric can absorb real anisotropic error into its scale
+parameter, sharpening `decisions/0020`'s own tentative worry into a
+measured mechanism. `bin/slam-run` now prints both diagnostics for every
+run, permanently. Full details: `memory/decisions/0027`.
 
 ## Building
 

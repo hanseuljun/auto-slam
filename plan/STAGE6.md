@@ -355,6 +355,30 @@ re-measures on all 5 sequences, bounded and full, both ATE metrics.
 - Test/deliverable: a real, plotted-or-tabulated scale-over-time record
   for at least 2 sequences, written up in `memory/decisions` regardless
   of what it shows.
+- **Result**: built `compute_sliding_window_scale` (`slam-eval`) and
+  measured it on `MH_01_easy`'s full trajectory — wildly non-monotonic
+  (0.016 to 0.228, swinging repeatedly), not a clean gradual ramp or a
+  step. Confirmed this isn't a window-size artifact (same wave shape at
+  20s/60s/90s windows) or a loop-closure artifact (persists pre- and
+  post-correction). Investigating *why* found the real, more fundamental
+  answer: the error isn't isotropic at all. Built `compute_axis_scale_
+  ratios` (rotates estimated into groundtruth's frame first, then
+  compares per-axis variance — a raw, non-rotated per-axis comparison is
+  meaningless) and measured real per-axis anisotropy on 2 sequences:
+  `MH_01_easy` x=3.95 y=2.74 **z=14.03**, `MH_04_difficult` x=1.12 y=1.60
+  **z=2.10** — Z is the worst axis on *both*, by a wide margin on
+  `MH_01`. This reframes the plan's own "gradual vs. step-change"
+  question: a single isotropic scalar was never the right thing to
+  track, and the sliding-window scale's own noise is the symptom of
+  trying to fit one number to an inherently anisotropic problem. Also
+  surfaced that `MH_01`'s much better ATE (4.058m) than `MH_04`'s
+  (6.279m) coexists with 7x *worse* anisotropic distortion (14.0x vs.
+  2.1x) — the isotropic Sim3-aligned ATE metric can absorb real
+  anisotropic error into its one scale parameter, sharpening
+  `decisions/0020`'s own tentative worry into a measured mechanism.
+  `bin/slam-run` now prints both the sliding-window scale table and the
+  per-axis anisotropy ratio for every run, permanently, not just for
+  this investigation. Full numbers and reasoning: `memory/decisions/0027`.
 
 ### M6 — Goal 3: test the residual-weighting hypothesis directly
 

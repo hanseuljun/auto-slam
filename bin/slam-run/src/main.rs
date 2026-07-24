@@ -390,6 +390,7 @@ fn run_sequence(seq_dir: &Path, out_dir: &Path, frame_cap: Option<usize>, run_id
     for rpe in &report.rpe {
         println!("  RPE (delta={} keyframes): rmse={:.3}m mean={:.3}m max={:.3}m over {} pairs", rpe.delta, rpe.rmse, rpe.mean, rpe.max, rpe.num_pairs);
     }
+    print_scale_drift(&estimated, &groundtruth, &timestamps, data_seconds);
     match &loop_closure_outcome {
         Some(o) if o.applied => println!(
             "  loop closure: keyframe {} <-> {} ({} inliers) applied — start/end gap {:.3}m -> {:.3}m",
@@ -426,6 +427,55 @@ fn run_sequence(seq_dir: &Path, out_dir: &Path, frame_cap: Option<usize>, run_id
 /// `pose_world_to_body` (world -> body) gives world -> cam0.
 fn world_to_cam0(t_bs_cam0: SE3, pose_world_to_body: SE3) -> SE3 {
     t_bs_cam0.inverse().compose(&pose_world_to_body)
+}
+
+/// Prints a sliding-window Sim3 scale record over the whole run, plus a
+/// per-axis anisotropy ratio — `plan/STAGE6.md` M5's real diagnostic
+/// instrumentation, answering `decisions/0020`'s open question (is the
+/// scale anomaly gradual drift or a step-change at a specific event?)
+/// directly rather than by more reasoning about it. Real data
+/// (`memory/decisions/0027`) answered a *different*, more fundamental
+/// question first: the isotropic sliding-window scale swings wildly
+/// (non-monotonically) between windows in a way plain "gradual vs
+/// step-change" doesn't cleanly describe, because the true error isn't
+/// isotropic at all — `compute_axis_scale_ratios` (rotating estimated
+/// into groundtruth's own frame first, unlike a naive raw-per-axis
+/// comparison) shows substantially different per-axis stretch factors,
+/// which a single scalar can only ever report as a shifting compromise
+/// depending on which axis's motion a given window happens to sample
+/// most. Window length is picked in *time*, not raw keyframe count
+/// (track-loss recovery, `plan/STAGE4.md` M2, forces off-stride
+/// keyframes, so keyframes-per-second isn't constant across sequences or
+/// runs — the same reasoning `align_prefix_len`'s own computation above
+/// already uses): ~20s, long enough to average out per-keyframe
+/// triangulation noise while still being much shorter than a full run.
+/// Printed at a handful of points across the run (not every window) to
+/// stay a readable table, not a flood — the same tradeoff `bin/slam-viz`'s
+/// own graphs panel makes for dense per-keyframe series.
+fn print_scale_drift(estimated: &[nalgebra::Vector3<f64>], groundtruth: &[nalgebra::Vector3<f64>], timestamps: &[u64], data_seconds: f64) {
+    const WINDOW_SECONDS: f64 = 20.0;
+    const TARGET_PRINTED_ROWS: usize = 12;
+
+    if timestamps.len() < 4 || data_seconds <= 0.0 {
+        return;
+    }
+    let avg_keyframe_rate = timestamps.len() as f64 / data_seconds;
+    let window_len = ((WINDOW_SECONDS * avg_keyframe_rate).round() as usize).clamp(3, timestamps.len().saturating_sub(1).max(3));
+
+    let step = ((timestamps.len() - window_len) / TARGET_PRINTED_ROWS).max(1);
+    let series = slam_eval::compute_sliding_window_scale(estimated, groundtruth, window_len, step);
+    if !series.is_empty() {
+        let t0 = timestamps[0];
+        println!("  scale drift (isotropic Sim3 fit over a sliding ~{WINDOW_SECONDS:.0}s window, `plan/STAGE6.md` M5):");
+        for (start, scale) in &series {
+            let t = (timestamps[*start] - t0) as f64 * 1e-9;
+            println!("    t={t:6.1}s  scale={scale:.4}");
+        }
+    }
+
+    if let Some(ratios) = slam_eval::compute_axis_scale_ratios(estimated, groundtruth) {
+        println!("  per-axis anisotropy (rotated-into-groundtruth-frame std ratio, est/gt): x={:.3} y={:.3} z={:.3}", ratios.x, ratios.y, ratios.z);
+    }
 }
 
 /// Refreshes a captured `LoopKeyframe`'s `landmarks_world` (and its own
