@@ -259,7 +259,7 @@ changing the default, no milestone closes on an assumed number.
   `docs/RESULTS.md`'s "Full-sequence results" section,
   `memory/progress/2026-07-24-stage4-m2-accuracy-regression-ruled-out.md`.
 
-### M3 — Flip the default, keep a fast bounded mode available
+### M3 — Flip the default, keep a fast bounded mode available — Done
 
 - Change `bin/slam-run`'s default from the 600-frame bounded clip to
   the full sequence, once M0-M2 confirm it's both real-time and
@@ -280,6 +280,28 @@ changing the default, no milestone closes on an assumed number.
   full-sequence numbers matching M0-M2's already-recorded results; a
   `--frames 600` (or similar) flag still available and still fast, for
   anyone who needs quick-iteration mode back.
+- **Result**: `bin/slam-run`'s `--full` flag is gone — inverted, exactly
+  as planned: `--frames N` now *caps* the run (opt-in bounded/fast mode,
+  e.g. `--frames 600` for the old default); omitting it runs the full,
+  un-truncated sequence. Verified `cargo run --release --bin slam-run`
+  (no flags) on all 5 sequences reproduces M0-M2's already-recorded
+  numbers exactly (ATE 3.868/3.854/3.460/6.600/6.818m, all under the
+  whole-run real-time bar) — a real full run, not an assumed match.
+  Also added `TimingBreakdown::whole_run_factor()` (vision + optimization
+  + global_ba + loop_closure, over data_seconds) and wired it into
+  `bin/slam-run`'s own console output alongside the pre-existing
+  per-frame-loop `real_time_factor()` — M0's own finding 2 flagged that
+  the old metric alone could "pass" on a number that no longer meant
+  what it used to once global BA stopped being negligible; now the
+  harness reports both directly instead of requiring a manual
+  recomputation to see the number Stage 4's goal 2 actually gates on.
+  `bin/slam-viz` needed no code changes — confirmed by loading a real
+  725-keyframe full-sequence run through `load_run_scene` directly (not
+  just assumed from the code's genericness): loaded cleanly, correct
+  vertex/bounding-box output. `docs/RESULTS.md`'s headline framing and
+  `README.md`'s reproduction instructions updated to describe the new
+  default and the `--frames` opt-in fast mode. **All of Stage 4's
+  milestones (M0-M3) are now done.**
 
 ## Out of scope for Stage 4
 

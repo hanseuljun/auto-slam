@@ -7,14 +7,19 @@
 //! continuous per-frame loop (frontend tracking + windowed backend
 //! optimization) divided by the amount of sensor data it processed.
 //!
-//! Defaults to a **bounded** run (`--frames`, default below), not a full
-//! sequence: an earlier, since-rolled-back attempt at this exact milestone
-//! ran the un-truncated pipeline over one full sequence and took 30+
-//! minutes wall-clock (see `plan/STAGE2.md`'s "What we already know" for
-//! the root cause — M8's global BA is a dense O(n^3) solve that scales
-//! with total keyframe count, since M5's window doesn't marginalize yet).
-//! Pass `--full` for a genuine full-sequence run once that's actually been
-//! fixed (Stage 2's M1-M3) or when the wait is acceptable.
+//! Defaults to the **full, un-truncated sequence** (`plan/STAGE4.md` M3).
+//! Stage 2 through Stage 4 M0/M1 defaulted to a 600-frame bounded clip
+//! instead, because an earlier, since-rolled-back attempt at Stage 2's own
+//! milestone ran the un-truncated pipeline and took 30+ minutes wall-clock
+//! (`global_bundle_adjustment`'s dense O(n^3) solve scaling with total
+//! keyframe count, unbounded). Stage 4 M1 fixed that (`VioParams::
+//! max_global_ba_keyframes` bounds global BA's own scope), and M2 confirmed
+//! the resulting full-sequence accuracy isn't a regression relative to the
+//! bounded clip (cross-validated against Stage 1 M6's independent VO-only
+//! baseline) — see `docs/RESULTS.md`'s "Full-sequence results" section.
+//! Pass `--frames N` for the old bounded/fast-iteration mode (e.g. `--frames
+//! 600` for ~30s of data), still useful for quick tuning turnaround
+//! (`decisions/0016`-`0017`'s sweeps used exactly this).
 //!
 //! Loop closure (M7) is deliberately not chained in here: it currently
 //! operates on `VoPipeline`, not `VioPipeline`, and only `MH_05_difficult`
@@ -40,17 +45,12 @@ struct Cli {
     #[arg(long, default_value = "runs")]
     out_dir: PathBuf,
 
-    /// Run every frame of the sequence instead of the bounded default.
-    /// Slow (see module doc comment) until Stage 2's M1-M3 land.
+    /// Cap the run at this many frames instead of the full-sequence
+    /// default — the old bounded/fast-iteration mode (e.g. 600 is ~30s of
+    /// data at EuRoC's 20Hz cam0 rate). Omit for the full, un-truncated
+    /// sequence.
     #[arg(long)]
-    full: bool,
-
-    /// Frame cap for the default (non-`--full`) run. ~600 frames is ~30s
-    /// of data at EuRoC's 20Hz cam0 rate — enough keyframes for a
-    /// meaningful real-time-factor measurement without the tool itself
-    /// becoming impractical to iterate with.
-    #[arg(long, default_value_t = 600)]
-    frames: usize,
+    frames: Option<usize>,
 }
 
 fn default_sequences() -> Vec<PathBuf> {
@@ -79,7 +79,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut reports = Vec::new();
     for seq_dir in &sequences {
-        if let Some(report) = run_sequence(seq_dir, &cli.out_dir, cli.full, cli.frames, &run_id, git_commit.as_deref())? {
+        if let Some(report) = run_sequence(seq_dir, &cli.out_dir, cli.frames, &run_id, git_commit.as_deref())? {
             reports.push(report);
         }
     }
@@ -102,7 +102,7 @@ fn main() -> anyhow::Result<()> {
 /// local and a medium-horizon drift picture.
 const RPE_DELTAS: &[usize] = &[1, 10];
 
-fn run_sequence(seq_dir: &Path, out_dir: &Path, full: bool, frame_cap: usize, run_id: &str, git_commit: Option<&str>) -> anyhow::Result<Option<slam_eval::TrajectoryReport>> {
+fn run_sequence(seq_dir: &Path, out_dir: &Path, frame_cap: Option<usize>, run_id: &str, git_commit: Option<&str>) -> anyhow::Result<Option<slam_eval::TrajectoryReport>> {
     let name = seq_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| seq_dir.display().to_string());
     println!("==== {name} ====");
 
@@ -137,9 +137,11 @@ fn run_sequence(seq_dir: &Path, out_dir: &Path, full: bool, frame_cap: usize, ru
     let gravity_world = static_init.gravity_direction_body * static_init.gravity_magnitude;
 
     let full_len = seq.cam0_frames.len().min(seq.cam1_frames.len());
-    let num_frames = if full { full_len } else { frame_cap.min(full_len) };
-    if !full && num_frames < full_len {
-        println!("bounded run: {num_frames}/{full_len} frames (pass --full for the complete sequence)");
+    let num_frames = frame_cap.map(|n| n.min(full_len)).unwrap_or(full_len);
+    if let Some(n) = frame_cap {
+        if n < full_len {
+            println!("bounded run: {num_frames}/{full_len} frames (omit --frames for the complete sequence)");
+        }
     }
 
     let left0 = seq.load_cam0_image(0)?;
@@ -237,8 +239,8 @@ fn run_sequence(seq_dir: &Path, out_dir: &Path, full: bool, frame_cap: usize, ru
             keyframe_stride: params.keyframe_stride,
             huber_delta: params.solver.huber_delta,
             solver_max_iterations: params.solver.max_iterations,
-            full_sequence: full,
-            frame_cap,
+            full_sequence: frame_cap.is_none(),
+            frame_cap: frame_cap.unwrap_or(full_len),
         },
         ate: report.ate,
         rpe: report.rpe.clone(),
@@ -254,12 +256,13 @@ fn run_sequence(seq_dir: &Path, out_dir: &Path, full: bool, frame_cap: usize, ru
         println!("  RPE (delta={} keyframes): rmse={:.3}m mean={:.3}m max={:.3}m over {} pairs", rpe.delta, rpe.rmse, rpe.mean, rpe.max, rpe.num_pairs);
     }
     println!(
-        "  timing: vision={:.2}s optimization={:.2}s global_ba={:.2}s (data={:.1}s) -> real-time factor={:.3}",
+        "  timing: vision={:.2}s optimization={:.2}s global_ba={:.2}s (data={:.1}s) -> VIO-loop factor={:.3} whole-run factor={:.3}",
         timing.vision_seconds,
         timing.optimization_seconds,
         timing.global_ba_seconds,
         timing.data_seconds,
-        timing.real_time_factor()
+        timing.real_time_factor(),
+        timing.whole_run_factor()
     );
     println!("wrote trajectory CSV to {}", csv_path.display());
     println!("wrote this run's history entry to {} (trajectory.csv + meta.json)", run_dir.display());
@@ -270,9 +273,17 @@ fn run_sequence(seq_dir: &Path, out_dir: &Path, full: bool, frame_cap: usize, ru
 
 fn print_summary_table(reports: &[slam_eval::TrajectoryReport]) {
     println!("==== summary ====");
-    println!("{:<20} {:>10} {:>10} {:>10}", "sequence", "ATE rmse", "ATE mean", "RT factor");
+    println!("{:<20} {:>10} {:>10} {:>12} {:>12}", "sequence", "ATE rmse", "ATE mean", "VIO-loop RT", "whole-run RT");
     for r in reports {
-        let rtf = r.timing.map(|t| t.real_time_factor());
-        println!("{:<20} {:>9.3}m {:>9.3}m {:>10}", r.sequence_name, r.ate.rmse, r.ate.mean, rtf.map(|v| format!("{v:.3}")).unwrap_or_else(|| "n/a".to_string()));
+        let vio_rtf = r.timing.map(|t| t.real_time_factor());
+        let whole_rtf = r.timing.map(|t| t.whole_run_factor());
+        println!(
+            "{:<20} {:>9.3}m {:>9.3}m {:>12} {:>12}",
+            r.sequence_name,
+            r.ate.rmse,
+            r.ate.mean,
+            vio_rtf.map(|v| format!("{v:.3}")).unwrap_or_else(|| "n/a".to_string()),
+            whole_rtf.map(|v| format!("{v:.3}")).unwrap_or_else(|| "n/a".to_string())
+        );
     }
 }

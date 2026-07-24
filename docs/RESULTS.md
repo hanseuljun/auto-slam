@@ -9,9 +9,9 @@ of narrative progress notes.
 ## How to reproduce
 
 ```
-cargo run --release --bin slam-run              # all 5 sequences, bounded default
-cargo run --release --bin slam-run -- --full     # full, un-truncated sequences (slow, see below)
-cargo run --release --bin slam-run -- data/machine_hall/MH_01_easy  # one sequence
+cargo run --release --bin slam-run                    # all 5 sequences, full un-truncated (Stage 4 M3 default; ~10 min total)
+cargo run --release --bin slam-run -- --frames 600    # bounded/fast-iteration mode (~30s of data each)
+cargo run --release --bin slam-run -- data/machine_hall/MH_01_easy  # one sequence, full
 ```
 
 Runs the full stereo-inertial VIO pipeline (Stage 1 M5, track-loss
@@ -34,18 +34,24 @@ and `runs/summary.csv` paths above are unchanged and still reflect the
 latest run. `plan/STAGE3.md`'s `bin/slam-viz` (goal 3, not yet built)
 will browse this history.
 
-**Results below (up to "Full-sequence results") are from the default
-bounded run** (600 frames, ~30s of data per sequence) — not `--full`.
-An earlier attempt at this exact milestone ran the un-truncated
-pipeline over one full sequence and took 30+ minutes wall-clock before
-being rolled back; see `memory/decisions/0011` for the determinism bug
-found and fixed since then. Global BA's O(n^3) scaling over the
-*windowed* solver (`plan/STAGE2.md`'s original "What we already know")
-is bounded by Stage 2 M1's real marginalization, but `global_bundle_
-adjustment` itself was not — it kept the same O(n^3) scaling over
-literal unbounded history until Stage 4 M1 fixed it; see "Full-sequence
-results" below for the real, measured before/after. All numbers below
-are reproducible bit-for-bit run to run (`decisions/0011`'s fix).
+**As of Stage 4 M3, `bin/slam-run`'s default is the full, un-truncated
+sequence** — see "Full-sequence results" below for those numbers, now
+what a plain `cargo run --release --bin slam-run` (no flags) actually
+produces. **The tables immediately below (up to "Full-sequence
+results") are from the bounded/fast-iteration mode instead** (`--frames
+600`, ~30s of data per sequence) — kept as an explicit opt-in for quick
+tuning turnaround (`decisions/0016`-`0017`'s sweeps used exactly this),
+not the default any more. An earlier attempt at this exact milestone ran
+the un-truncated pipeline over one full sequence and took 30+ minutes
+wall-clock before being rolled back; see `memory/decisions/0011` for the
+determinism bug found and fixed since then. Global BA's O(n^3) scaling
+over the *windowed* solver (`plan/STAGE2.md`'s original "What we already
+know") is bounded by Stage 2 M1's real marginalization, but
+`global_bundle_adjustment` itself was not — it kept the same O(n^3)
+scaling over literal unbounded history until Stage 4 M1 fixed it; see
+"Full-sequence results" below for the real, measured before/after. All
+numbers below are reproducible bit-for-bit run to run
+(`decisions/0011`'s fix).
 
 **Updated after Stage 2 M1** (real marginalization, `decisions/0007`,
 plus two real bugs it surfaced and fixed — `decisions/0012`-`0014`,
@@ -81,7 +87,7 @@ are the final M6 numbers: same as M1's, since every M6 tuning attempt
 (noise weighting, window size, Huber threshold) was reverted except the
 MH_02/03 bootstrap fix, which is already reflected here.
 
-## ATE RMSE (meters), bounded 600-frame (~30s) clips, no loop closure
+## ATE RMSE (meters), bounded 600-frame (~30s) clips (`--frames 600`), no loop closure
 
 | Sequence | This repo (M5+M8+M1, ~30s clip) | ORB-SLAM3 (full seq.) | OKVIS (full seq.) | VINS-Fusion (full seq.) | Kimera (full seq.) |
 |---|---|---|---|---|---|
@@ -132,13 +138,15 @@ Because of this, Stage 2's M2 (analytic IMU Jacobians), M3 (sparse
 solve), and M4 (`rayon` parallelism) are no longer required to hit the
 real-time goal — see `plan/STAGE2.md` for the resulting re-scoping.
 
-## Full-sequence results (Stage 4 M0/M1)
+## Full-sequence results (Stage 4 M0-M3 — now the default)
 
-`plan/STAGE4.md`'s goal: make `bin/slam-run --full` (not just the
-bounded 600-frame clip above) both real-time and no worse on accuracy.
-Measured on all 5 sequences, foreground (background execution of a
-multi-minute `--full` run proved unreliable this session — see
-`memory/progress/2026-07-23-stage4-m0-mh01-full-sequence-measured.md`).
+`plan/STAGE4.md`'s goal: make a full, un-truncated run (not just the
+bounded 600-frame clip above) both real-time and no worse on accuracy,
+then make it the default (M3) — done; a plain `cargo run --release --bin
+slam-run` (no flags) now produces the numbers below. Measured on all 5
+sequences, foreground (background execution of a multi-minute run
+proved unreliable this session — see `memory/progress/2026-07-23-
+stage4-m0-mh01-full-sequence-measured.md`).
 
 **Before the M1 fix**: `MH_01_easy` alone was profiled live (macOS
 `sample`) mid-run — 100% of sampled stack frames were inside

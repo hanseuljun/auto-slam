@@ -15,11 +15,11 @@ Kimera-VIO), and — as of Stage 2 — real-time processing (1 second of
 sensor data processed in at most 1 second of wall-clock, **now
 confirmed on full, un-truncated sequences too, Stage 4 M0/M1**, see
 below), and — as of Stage 3 — trajectory visualization (`slam-render` +
-`bin/slam-viz`, **done**). Current plan: [`plan/STAGE4.md`](plan/STAGE4.md)
-— `bin/slam-run --full` is now real-time on every sequence, and its
-full-sequence accuracy is confirmed not to be a regression (M2, see
-below); next is flipping the default from the bounded clip to the full
-sequence (M3). [`plan/STAGE1.md`](plan/STAGE1.md),
+`bin/slam-viz`, **done**). **Stage 4 is done**: `bin/slam-run` now
+defaults to the full, un-truncated sequence (M3) — real-time on every
+sequence (M1) and confirmed not to be an accuracy regression relative to
+the old bounded-clip numbers (M2). Pass `--frames 600` for the old
+bounded/fast-iteration mode. [`plan/STAGE1.md`](plan/STAGE1.md),
 [`plan/STAGE2.md`](plan/STAGE2.md), and
 [`plan/STAGE3.md`](plan/STAGE3.md) are all done and worth reading for
 that history.
@@ -44,7 +44,7 @@ visualization — `slam-render`, a hand-written 3D rendering library, plus
 frames and diagnostic graphs, synced, and lets users browse past runs)
 is also done: M0-M7 all landed (M7's optional multi-run-comparison
 stretch deferred, not required) — see below. **Stage 4** (full-sequence
-real-time VIO — M0/M1/M2 done, M3 next) exists because Stage 2's
+real-time VIO — M0-M3 all done) exists because Stage 2's
 own real-time-factor number was only ever measured on the 600-frame
 bounded clip `bin/slam-run` defaults to, a gap `plan/STAGE2.md`'s own
 Risks section predicted ("a truncated clip that happens to fit inside
@@ -83,7 +83,7 @@ for a session-by-session log of what landed and when.
 | Stage 4 M0 | Full-sequence baseline measurement (all 5 sequences) | Done |
 | Stage 4 M1 | Bound `global_bundle_adjustment`'s scope (real-time fix) | **Done — whole-run wall-clock now ≤1.0x on all 5 sequences** |
 | Stage 4 M2 | Root-cause full-sequence ATE regression (5.6x-25.6x vs. bounded clip) | **Done — confirmed natural drift, not a bug, see `docs/RESULTS.md`** |
-| Stage 4 M3 | Flip `bin/slam-run`'s default to full-sequence | Next — unblocked by M2 |
+| Stage 4 M3 | Flip `bin/slam-run`'s default to full-sequence | **Done — `--frames N` opt-in for the old bounded/fast mode** |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
@@ -343,10 +343,36 @@ BA over the full history wasn't preventing drift anyway (this harness
 doesn't chain in loop closure), so bounding its scope cost nothing.
 That said, full-sequence ATE is genuinely 5.6x-25.6x worse than the
 bounded-clip numbers above, on every sequence — a real, confirmed,
-pre-existing gap (not caused by this fix), and Stage 4's next open
-item (M2) before the default can flip to full-sequence. See
-`docs/RESULTS.md`'s "Full-sequence results" section for the complete
-before/after table.
+pre-existing gap (not caused by this fix). See `docs/RESULTS.md`'s
+"Full-sequence results" section for the complete before/after table.
+
+**Stage 4's M2**: is that 5.6x-25.6x gap a bug, or just what running
+6x longer without loop closure naturally looks like? Investigated two
+candidates. First, instrumented `bin/slam-run` to count track-loss
+recoveries (keyframes forced by too-few-surviving-LK-tracks, IMU-only
+propagation with a map reset, `plan/STAGE1.md` M6) — a striking 45-52%
+of all keyframes on every sequence, but the *same* rate shows up on the
+bounded clip too (MH_01: 44.3% bounded vs. 51.6% full), so recovery
+frequency isn't what differs between the two scales — ruled out as this
+gap's cause, though real and worth a future stage's attention. Second,
+decisive: `plan/STAGE1.md` M6 already measured full-sequence ATE for a
+pure-VO pipeline (no IMU fusion, no windowed backend, no global BA at
+all) back in Stage 1, and documented multi-meter drift there as
+"expected, not a regression." Re-ran that check fresh against current
+code: full VIO's ATE lands within ~20% of that independent baseline on
+every sequence (within 2% on 3 of 5), despite the two pipelines sharing
+almost no code path. Both are dominated by the same cause — no loop
+closure, so a multi-minute flight accumulates multi-meter drift no
+amount of windowed/global optimization can correct without an absolute
+reference. Confirmed natural drift, not a bug; no fix applied.
+
+**Stage 4's M3**: with M1 (real-time) and M2 (accuracy, confirmed sound)
+both closed, `bin/slam-run` now defaults to the full, un-truncated
+sequence — the old `--full` flag is gone (inverted: full is now the
+default), and `--frames N` opts into the old bounded/fast-iteration mode
+instead. `bin/slam-viz` needed no code changes (confirmed by loading a
+real 725-keyframe full-sequence run through it directly) since it
+already just renders whatever `trajectory.csv` it's given.
 
 ## Building
 
@@ -405,9 +431,9 @@ per-milestone intermediate state, `bin/slam-run` runs the full pipeline
 end to end and reports the numbers in [`docs/RESULTS.md`](docs/RESULTS.md).
 
 ```
-cargo run --release --bin slam-run                       # all sequences, bounded default (~30s of data each)
-cargo run --release --bin slam-run -- --full              # full, un-truncated sequences (slow — see docs/RESULTS.md)
-cargo run --release --bin slam-run -- data/machine_hall/MH_01_easy  # one sequence
+cargo run --release --bin slam-run                             # all sequences, full un-truncated (Stage 4 M3 default; ~10 min total)
+cargo run --release --bin slam-run -- --frames 600              # bounded/fast-iteration mode (~30s of data each)
+cargo run --release --bin slam-run -- data/machine_hall/MH_01_easy  # one sequence, full
 ```
 
 Writes `runs/<sequence>/trajectory.csv` (per-timestamp estimated vs.
