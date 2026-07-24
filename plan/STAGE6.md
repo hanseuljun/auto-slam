@@ -269,6 +269,38 @@ re-measures on all 5 sequences, bounded and full, both ATE metrics.
   numerical tolerance; wall-clock cost on `MH_01_easy`'s full 741-keyframe
   trajectory measured directly (not estimated) and confirmed to hold the
   real-time bar with room to spare — the entire point of this milestone.
+- **Result**: hand-rolled a block-tridiagonal (block Thomas) elimination
+  for the chain of odometry edges, plus a Sherman-Morrison-Woodbury
+  low-rank correction for the loop edge(s) — every edge's full Hessian
+  contribution is exactly `U U^T` for a rank-6 factor, so a "chord" edge
+  (not adjacent in free-index order) is just a rank-6 update to the
+  tridiagonal system. Tried `nalgebra-sparse` as infra first (the plan's
+  other option); reverted immediately — it pulls in `nalgebra 0.35`
+  while this workspace pins `0.33` everywhere else, a real, immediate
+  incompatibility, not a style preference, which settled the "hand-roll
+  vs. crate" choice decisively. Verified against an independently-
+  assembled dense solve of the *same* system for `k=0,1,2` chords (all
+  match to `1e-6`) — this strict check caught a real double-counting bug
+  (a chord edge's diagonal contribution was being added both directly
+  and via its Woodbury term) the existing loose end-to-end test missed
+  entirely, since extra diagonal regularization doesn't break qualitative
+  convergence. Measured (not estimated) wall-clock on a synthetic
+  741-node graph matching `MH_01_easy`'s exact full-trajectory size:
+  **~97ms** for 50 LM iterations, versus the old dense solver's "didn't
+  finish in 10+ minutes" on this same size — several orders of magnitude,
+  the entire point of this milestone. A real end-to-end `MH_01_easy` run
+  (current stride, unchanged) gives a deterministic but *different*
+  result than before (worse RPE delta=1, better loop gap-closure) despite
+  the linear solve being independently proven exact — the same "hard-
+  threshold decisions are sensitive to any numerical-precision change"
+  phenomenon `decisions/0023` already documented for M1, not a new
+  correctness concern. **Deliberately not done**: the analytic edge
+  Jacobian — a correct closed form needs SE3's own 6x6 left/right
+  Jacobian of the exponential map, machinery this codebase doesn't have
+  (`SO3::left_jacobian`/`right_jacobian` are 3x3-only), and deriving +
+  validating it is a Stage-6-M1-sized undertaking on its own, not a
+  footnote; it's also not the performance bottleneck this milestone
+  removes. Full reasoning and every number: `memory/decisions/0025`.
 
 ### M4 — Goal 2: use the removed ceiling, re-verify the real-time bar
 

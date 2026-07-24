@@ -24,12 +24,14 @@ start is now honest (a new prefix-aligned metric that doesn't let later
 drift mask early accuracy) and loop closure is chained into
 `bin/slam-run`'s real pipeline on every sequence, gated on a real
 geometric check — see [`docs/RESULTS.md`](docs/RESULTS.md)'s "Loop
-closure and honest ATE" section. **Stage 6 (in progress, M0-M2 done)**
+closure and honest ATE" section. **Stage 6 (in progress, M0-M3 done)**
 is closing the remaining accuracy gap an HTML diagnostic surfaced:
 analytic IMU Jacobians landed (M1, a real but mostly negative accuracy
-effect, kept anyway), and real preintegration covariance propagation was
+effect, kept anyway), real preintegration covariance propagation was
 tried as solver weighting, measured a severe regression, and reverted
-(M2) — see `memory/decisions/0023`/`0024`. [`plan/STAGE1.md`](plan/STAGE1.md),
+(M2), and a hand-rolled sparse pose-graph solver replaced loop
+closure's dense O(n^3) correction ceiling (M3) — see
+`memory/decisions/0023`/`0024`/`0025`. [`plan/STAGE1.md`](plan/STAGE1.md),
 [`plan/STAGE2.md`](plan/STAGE2.md), and
 [`plan/STAGE3.md`](plan/STAGE3.md) are all done and worth reading for
 that history.
@@ -67,13 +69,14 @@ existing whole-trajectory alignment let a bad ending mask a good
 beginning), and because every `machine_hall` sequence returns near its
 own starting point yet loop closure — real, tested code since Stage 1
 M7 — was never wired into the pipeline `bin/slam-run` actually reports
-numbers for. **Stage 6** (in progress, M0-M2 done) exists because an
+numbers for. **Stage 6** (in progress, M0-M3 done) exists because an
 HTML diagnostic built after Stage 5 found the accuracy gap against
 published stereo-inertial SLAM systems was still 90-280x worse than
 state of the art across 4 layers; M1/M2 tackled the first layer (real
 analytic Jacobians + real covariance propagation for the IMU factor),
 both landing with real, honestly-measured accuracy effects rather than
-the expected "transparent improvement." See [`plan/STAGE1.md`](plan/STAGE1.md),
+the expected "transparent improvement," and M3 tackled the second layer
+(the sparse solver removing loop closure's own correction ceiling). See [`plan/STAGE1.md`](plan/STAGE1.md),
 [`plan/STAGE2.md`](plan/STAGE2.md), [`plan/STAGE3.md`](plan/STAGE3.md),
 [`plan/STAGE4.md`](plan/STAGE4.md), and [`plan/STAGE5.md`](plan/STAGE5.md)
 for the full milestone lists and [`memory/progress/`](memory/progress/)
@@ -114,7 +117,8 @@ for a session-by-session log of what landed and when.
 | Stage 6 M0 | Baseline tuning gap, scope covariance propagation work | Done |
 | Stage 6 M1 | Analytic IMU Jacobians (replacing numerical) | **Done — correct, but a real (mostly negative) accuracy effect found and kept, see `memory/decisions/0023`** |
 | Stage 6 M2 | Real preintegration covariance propagation as solver weighting | **Done — tried, measured a real regression (up to +101% ATE), reverted; see `memory/decisions/0024`** |
-| Stage 6 M3 | Sparse pose-graph solver (removes loop closure's O(n^3) ceiling) | In progress |
+| Stage 6 M3 | Sparse pose-graph solver (removes loop closure's O(n^3) ceiling) | **Done — hand-rolled block-tridiagonal + Woodbury solver, ~97ms vs. 10+ min on a 741-node graph, see `memory/decisions/0025`** |
+| Stage 6 M4 | Reduce loop-closure stride, re-verify real-time bar | In progress |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
@@ -476,6 +480,26 @@ extreme information-scale mismatch produced negative eigenvalues in the
 marginal prior, making the solver's cost function unbounded below and one
 step diverge to a velocity of ~9573 m/s. Full numbers and reasoning:
 `memory/decisions/0023`/`0024`.
+
+**Stage 6's M3**: replaced `optimize_pose_graph`'s dense `DMatrix`/LU
+solve — `O(n^3)`, and the reason M1's own doc comment recorded it failing
+to finish in 10+ minutes on `MH_01_easy`'s full 741-keyframe trajectory —
+with one exploiting the pose graph's real structure: a block-tridiagonal
+(block Thomas) elimination for the chain of odometry edges, plus a
+Sherman-Morrison-Woodbury low-rank correction for the loop edge(s) (every
+edge's Hessian contribution is exactly a rank-6 `U U^T`, so a non-adjacent
+"chord" edge is just a rank-6 update to the tridiagonal system). Tried
+`nalgebra-sparse` as infra first; reverted immediately — it pulls in
+`nalgebra 0.35` while this workspace pins `0.33` everywhere else, a real
+version conflict that settled the "hand-roll vs. crate" choice
+decisively. Verified against an independently-assembled dense solve for
+`k=0,1,2` chords (all match to `1e-6`) — this strict check caught a real
+double-counting bug (a chord's diagonal contribution was added both
+directly and via its Woodbury term) that the existing loose end-to-end
+test missed entirely. Measured wall-clock on a synthetic 741-node graph
+matching `MH_01_easy`'s exact size: ~97ms for 50 LM iterations, several
+orders of magnitude under the old solver's non-completion. Full numbers:
+`memory/decisions/0025`.
 
 ## Building
 
