@@ -109,7 +109,7 @@ against the existing test suite before trusting a new derivation, no
 milestone closes on an assumed number. Every accuracy milestone
 re-measures on all 5 sequences, bounded and full, both ATE metrics.
 
-### M0 — Goal 1: baseline the tuning gap fresh, scope the covariance work
+### M0 — Goal 1: baseline the tuning gap fresh, scope the covariance work — Done
 
 - Re-measure today's exact bounded-clip and full-sequence gap vs. SOTA on
   all 5 sequences as this stage's own clean starting point (numbers exist
@@ -126,6 +126,22 @@ re-measures on all 5 sequences, bounded and full, both ATE metrics.
 - Test/deliverable: a written scope decision (`memory/decisions`) for
   what "real" covariance propagation means here, backed by the fresh
   baseline numbers this fix is trying to move.
+- **Result**: fresh baseline confirmed identical to `docs/RESULTS.md`'s
+  existing numbers on both paths (deterministic pipeline, no code
+  changes since Stage 5 — `decisions/0011`'s determinism fix holds):
+  bounded-clip 0.151/0.184/0.511/1.174/0.455m, full-sequence
+  3.505/3.546/3.451/6.496/6.596m. Scope decision written
+  (`memory/decisions/0022`): the gap is structural, not a missing input
+  — `SolverConfig`'s three IMU weights are fixed isotropic scalars
+  shared by every IMU factor regardless of that factor's own `dt` or
+  any rotation/velocity/position correlation, and `decisions/0016`
+  already showed twice that deriving them from raw sensor noise
+  densities alone (ignoring bias-uncertainty coupling) regresses real
+  data. The fix: extend `Preintegration` with Forster et al.'s own
+  covariance propagation recursion (reusing the bias Jacobians it
+  already computes), and replace the three global scalars with a
+  per-factor 9x9 information matrix derived from it — not a third
+  variant of the same isolated-formula approach already tried twice.
 
 ### M1 — Goal 1: analytic IMU Jacobians
 
