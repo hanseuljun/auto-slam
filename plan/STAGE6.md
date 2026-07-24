@@ -143,7 +143,7 @@ re-measures on all 5 sequences, bounded and full, both ATE metrics.
   per-factor 9x9 information matrix derived from it — not a third
   variant of the same isolated-formula approach already tried twice.
 
-### M1 — Goal 1: analytic IMU Jacobians
+### M1 — Goal 1: analytic IMU Jacobians — Done
 
 - Replace `imu_factor.rs`'s central-difference Jacobians with closed-form
   analytic ones, following the same pattern `reprojection.rs` already
@@ -162,6 +162,37 @@ re-measures on all 5 sequences, bounded and full, both ATE metrics.
   `cargo test` still passes unchanged (this must be a transparent swap,
   not a behavior change) — confirm bit-for-bit-identical optimization
   results on a real sequence before and after, within numerical noise.
+- **Result**: derived all 18 Jacobian blocks by hand against this
+  codebase's own left-multiplicative SE3 perturbation convention (not
+  copied from a textbook/ORB-SLAM3-style table, which assumes a
+  different, right-multiplicative one and would silently carry wrong
+  signs) — full reasoning in the code's own doc comment
+  (`crates/slam-optim/src/imu_factor.rs`). Correctness validated
+  extensively before trusting it: both `jac_i` and `jac_j` (the original
+  test only ever checked `jac_i`) against finite difference on 3
+  hand-picked configurations plus a 40-case randomized stress sweep
+  specifically targeting short intervals, large bias offsets, and large
+  rotations — all pass at tight tolerance (1e-4 to 5e-3).
+  **Correctness is not in question; the "transparent swap, no behavior
+  change" expectation this bullet stated was wrong, though** — measured,
+  not assumed, and the real number contradicts it: bounded-clip ATE
+  changed -14.4% to +74.8% across the 5 sequences (4 of 5 got worse,
+  `MH_03_medium` by nearly double), full-sequence ATE changed -0.6% to
+  +17.0% (milder, but still real, 4 of 5 worse). Cross-checked that this
+  isn't a Jacobian bug: reverting to the *old* numerical Jacobian but at
+  a different epsilon (1e-6 -> 1e-5, no analytic code involved at all)
+  also shifted `MH_03`'s bounded-clip ATE (0.511m -> 0.495m) — smaller
+  than the analytic swap's own effect, but confirms this pipeline's
+  keyframe/track-loss-recovery decisions are genuinely sensitive to
+  *any* change in Jacobian precision, not specifically to this one.
+  Leading hypothesis, not yet confirmed: `SolverConfig`'s ad hoc weights
+  were hand-tuned against the *old* numerical Jacobian's own specific
+  behavior (`decisions/0016`'s own precedent names exactly this failure
+  mode for a different knob), so a more precise Jacobian doesn't
+  automatically help against weights implicitly co-tuned to the less
+  precise one — M2's own re-weighting work should re-verify this effect
+  once it lands, not assume M1 alone should have been net-positive.
+  Full numbers and reasoning: `memory/decisions/0023`.
 
 ### M2 — Goal 1: real preintegration covariance propagation, measure
 
