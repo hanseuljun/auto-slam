@@ -19,12 +19,17 @@ below), and — as of Stage 3 — trajectory visualization (`slam-render` +
 defaults to the full, un-truncated sequence (M3) — real-time on every
 sequence (M1) and confirmed not to be an accuracy regression relative to
 the old bounded-clip numbers (M2). Pass `--frames 600` for the old
-bounded/fast-iteration mode. **Stage 5 (in progress, M0-M2 done)**: ATE
-near a trajectory's start is now honest (a new prefix-aligned metric
-that doesn't let later drift mask early accuracy) and loop closure is
-chained into `bin/slam-run`'s real pipeline on every sequence, gated on
-a real geometric check — see [`docs/RESULTS.md`](docs/RESULTS.md)'s
-"Loop closure and honest ATE" section. [`plan/STAGE1.md`](plan/STAGE1.md),
+bounded/fast-iteration mode. **Stage 5 is done**: ATE near a trajectory's
+start is now honest (a new prefix-aligned metric that doesn't let later
+drift mask early accuracy) and loop closure is chained into
+`bin/slam-run`'s real pipeline on every sequence, gated on a real
+geometric check — see [`docs/RESULTS.md`](docs/RESULTS.md)'s "Loop
+closure and honest ATE" section. **Stage 6 (in progress, M0-M2 done)**
+is closing the remaining accuracy gap an HTML diagnostic surfaced:
+analytic IMU Jacobians landed (M1, a real but mostly negative accuracy
+effect, kept anyway), and real preintegration covariance propagation was
+tried as solver weighting, measured a severe regression, and reverted
+(M2) — see `memory/decisions/0023`/`0024`. [`plan/STAGE1.md`](plan/STAGE1.md),
 [`plan/STAGE2.md`](plan/STAGE2.md), and
 [`plan/STAGE3.md`](plan/STAGE3.md) are all done and worth reading for
 that history.
@@ -56,13 +61,19 @@ Risks section predicted ("a truncated clip that happens to fit inside
 the window can look real-time for reasons that have nothing to do with
 actually fixing the scaling") and `docs/RESULTS.md` admits was never
 closed ("not re-benchmarked with `--full` yet"). **Stage 5** (honest
-drift measurement + real loop closure — M0-M2 done, M3 in progress)
-exists because ATE near a trajectory's start was silently absorbing
-later drift (the existing whole-trajectory alignment let a bad ending
-mask a good beginning), and because every `machine_hall` sequence
-returns near its own starting point yet loop closure — real, tested
-code since Stage 1 M7 — was never wired into the pipeline `bin/slam-run`
-actually reports numbers for. See [`plan/STAGE1.md`](plan/STAGE1.md),
+drift measurement + real loop closure — all done, M0-M3) existed because
+ATE near a trajectory's start was silently absorbing later drift (the
+existing whole-trajectory alignment let a bad ending mask a good
+beginning), and because every `machine_hall` sequence returns near its
+own starting point yet loop closure — real, tested code since Stage 1
+M7 — was never wired into the pipeline `bin/slam-run` actually reports
+numbers for. **Stage 6** (in progress, M0-M2 done) exists because an
+HTML diagnostic built after Stage 5 found the accuracy gap against
+published stereo-inertial SLAM systems was still 90-280x worse than
+state of the art across 4 layers; M1/M2 tackled the first layer (real
+analytic Jacobians + real covariance propagation for the IMU factor),
+both landing with real, honestly-measured accuracy effects rather than
+the expected "transparent improvement." See [`plan/STAGE1.md`](plan/STAGE1.md),
 [`plan/STAGE2.md`](plan/STAGE2.md), [`plan/STAGE3.md`](plan/STAGE3.md),
 [`plan/STAGE4.md`](plan/STAGE4.md), and [`plan/STAGE5.md`](plan/STAGE5.md)
 for the full milestone lists and [`memory/progress/`](memory/progress/)
@@ -99,7 +110,11 @@ for a session-by-session log of what landed and when.
 | Stage 5 M0 | Root-cause the ATE alignment/scale anomaly, decide a fix | **Done — see `memory/decisions/0020`** |
 | Stage 5 M1 | Prefix-aligned ATE (honest error near a trajectory's start) | **Done — see `docs/RESULTS.md`** |
 | Stage 5 M2 | Wire real loop closure into `bin/slam-run`'s actual pipeline | **Done — see `memory/decisions/0021`** |
-| Stage 5 M3 | Verify the loop is actually closed, update headline docs | In progress |
+| Stage 5 M3 | Verify the loop is actually closed, update headline docs | **Done — 2.1x-4.8x gap-closure ratio on all 5 sequences, short of a full order of magnitude, recorded honestly** |
+| Stage 6 M0 | Baseline tuning gap, scope covariance propagation work | Done |
+| Stage 6 M1 | Analytic IMU Jacobians (replacing numerical) | **Done — correct, but a real (mostly negative) accuracy effect found and kept, see `memory/decisions/0023`** |
+| Stage 6 M2 | Real preintegration covariance propagation as solver weighting | **Done — tried, measured a real regression (up to +101% ATE), reverted; see `memory/decisions/0024`** |
+| Stage 6 M3 | Sparse pose-graph solver (removes loop closure's O(n^3) ceiling) | In progress |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
@@ -426,6 +441,41 @@ all 5 sequences: a loop is detected, verified, and applied everywhere,
 shrinking the trajectory's own start/end gap 2x-4.8x, real-time bar
 holding throughout (whole-run factor 0.56-0.85). Full numbers:
 `docs/RESULTS.md`'s "Loop closure and honest ATE" section.
+
+**Stage 6's M1**: replaced the IMU factor's numerical (central-
+difference) Jacobian with a fully analytic one, hand-derived against this
+codebase's own left-multiplicative SE3 convention (not copied from a
+textbook/ORB-SLAM3-style table, which assumes a different convention and
+would silently carry wrong signs) and validated against finite
+difference on 43 cases (3 hand-picked configurations plus a 40-case
+randomized stress sweep). Correctness isn't in question, but the plan's
+own "transparent swap, bit-for-bit identical" expectation was wrong: real
+bounded-clip ATE changed -14.4% to +74.8% across the 5 sequences (4 of 5
+worse). Cross-checked this wasn't a Jacobian bug — reverting to the old
+numerical Jacobian at a different epsilon (no analytic code involved at
+all) also shifted results, confirming this pipeline's track-loss-recovery
+decisions are genuinely sensitive to *any* Jacobian-precision change, not
+specific to this one. Kept anyway, since it's a real correctness
+improvement and the prerequisite M2's real covariance propagation needs.
+
+**Stage 6's M2**: built and Monte-Carlo-validated real, step-by-step
+IMU preintegration covariance propagation (Forster et al.'s recursion),
+then tried wiring it into the solver as a per-factor information matrix
+replacing 3 ad hoc IMU weight scalars. Measured a severe regression —
+bounded-clip ATE rmse worse on 4 of 5 sequences, up to +101%
+(`MH_05_difficult`) — because EuRoC's real noise densities make the
+solver 30-166x more confident in a single short IMU interval than the
+old ad hoc scalars were, which over-trusts IMU-only propagation relative
+to vision and lets drift compound between corrections. The same failure
+mode `decisions/0016` already found once for bias-random-walk weights.
+Reverted the weighting (kept the covariance propagation itself as
+infrastructure for later use), which recovered the pre-M2 baseline. Along
+the way, the experiment surfaced — and this milestone fixed, kept as
+defense in depth — a real marginalization numerical-stability bug: an
+extreme information-scale mismatch produced negative eigenvalues in the
+marginal prior, making the solver's cost function unbounded below and one
+step diverge to a velocity of ~9573 m/s. Full numbers and reasoning:
+`memory/decisions/0023`/`0024`.
 
 ## Building
 

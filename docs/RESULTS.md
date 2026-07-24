@@ -332,12 +332,21 @@ repo's other dense-solver call sites have already taken).
   characteristic in this pipeline's own reconstruction (`memory/
   decisions/0020`) — not yet resolved, so this comparison may be more
   favorable to this repo than a strictly fair one would be.
-- **Noise weighting is still ad hoc**, not derived from `sensor.yaml`'s
-  real covariances (`memory/decisions/0006`) — tried in Stage 2 M6
-  (`decisions/0016`), measurably regressed real data, reverted. Properly
-  fixing this needs full nonlinear preintegration covariance propagation,
-  not a simpler per-residual-type formula — a real, larger, separate
-  undertaking, not a sign this harness is broken.
+- **IMU noise weighting is still ad hoc**, not derived from `sensor.yaml`'s
+  real covariances (`memory/decisions/0006`) — tried twice now and
+  reverted both times: a simpler per-residual-type formula in Stage 2 M6
+  (`decisions/0016`), and full nonlinear preintegration covariance
+  propagation (Forster et al.'s own recursion, correctly implemented and
+  Monte-Carlo-validated) as a per-factor information matrix in Stage 6 M2
+  (`memory/decisions/0024`) — both measurably regressed real data (M2's
+  effect was larger: up to +101% bounded-clip ATE on one sequence).
+  Root cause understood, not just observed: EuRoC's real noise densities
+  make a short IMU interval look 30-166x more trustworthy than the ad hoc
+  scalars this repo keeps using, but this pipeline needs vision to
+  correct IMU-only drift more often than that implies, so "physically
+  correct in isolation" isn't "more accurate here." Not a sign the
+  weighting math is wrong — a real, twice-confirmed property of this
+  specific pipeline.
 - **The remaining ad hoc knobs (Huber threshold, `window_size`) are
   at a local optimum for the current pipeline, not a global one** —
   M6 swept both in both directions (`memory/decisions/0017`) and every

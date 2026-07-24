@@ -52,6 +52,20 @@ pub struct VioParams {
     pub lk: LkParams,
     pub stereo: StereoMatchParams,
     pub solver: SolverConfig,
+    /// Raw gyro/accel measurement noise density (`sensor.yaml`'s own
+    /// `gyroscope_noise_density`/`accelerometer_noise_density`, distinct
+    /// from `solver.bias_gyro_rw_weight`/`bias_accel_rw_weight` which are
+    /// derived from the *random walk* densities instead) — fed into every
+    /// `Preintegration::new` call here so its per-step covariance
+    /// propagation (`plan/STAGE6.md` M2) reflects the real sensor, not a
+    /// placeholder. Not currently read by the solver's own IMU weighting
+    /// (`memory/decisions/0024`: real per-factor covariance weighting was
+    /// tried and measured to regress accuracy, reverted), but kept as
+    /// validated infrastructure for future uncertainty-aware work.
+    /// Defaults to EuRoC's own ADIS16448 values, the same physical sensor
+    /// across all 5 `machine_hall` sequences.
+    pub gyro_noise_density: f64,
+    pub accel_noise_density: f64,
 }
 
 impl Default for VioParams {
@@ -75,6 +89,10 @@ impl Default for VioParams {
             lk: LkParams::default(),
             stereo: StereoMatchParams::default(),
             solver: SolverConfig::default(),
+            // EuRoC ADIS16448 real values (`data/machine_hall/*/mav0/imu0/
+            // sensor.yaml`, identical across all 5 sequences).
+            gyro_noise_density: 1.6968e-04,
+            accel_noise_density: 2.0000e-3,
         }
     }
 }
@@ -305,7 +323,7 @@ impl VioPipeline {
 
         // IMU doesn't care whether vision tracking succeeded — always
         // preintegrate the buffered samples.
-        let mut preint = Preintegration::new(prev_state.bias_gyro, prev_state.bias_accel);
+        let mut preint = Preintegration::new(prev_state.bias_gyro, prev_state.bias_accel, self.params.gyro_noise_density, self.params.accel_noise_density);
         for pair in self.imu_buffer.windows(2) {
             let step_dt = (pair[1].timestamp_ns - pair[0].timestamp_ns) as f64 * 1e-9;
             preint.integrate_measurement(pair[0].gyro, pair[0].accel, step_dt);
@@ -740,7 +758,7 @@ mod tests {
         let rate_hz = 200.0;
         let steps = (dt_total * rate_hz) as usize;
         let dt_step = 1.0 / rate_hz;
-        let mut preint = Preintegration::new(Vector3::zeros(), Vector3::zeros());
+        let mut preint = Preintegration::new(Vector3::zeros(), Vector3::zeros(), 1.6968e-4, 2.0000e-3);
         for i in 0..steps {
             let t = i as f64 * dt_step;
             let r_wb = body_pose_at(t).rotation;

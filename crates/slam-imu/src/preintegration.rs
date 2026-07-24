@@ -1,5 +1,9 @@
-use nalgebra::{Matrix3, Vector3};
+use nalgebra::{Matrix3, Matrix6, SMatrix, Vector3};
 use slam_core::SO3;
+
+/// 9x9 covariance for the `[rotation; velocity; position]` error state, same
+/// ordering `slam_optim::imu_residual`'s 9-dim residual uses.
+pub type Covariance9 = SMatrix<f64, 9, 9>;
 
 /// On-manifold IMU preintegration between two keyframes (Forster et al.,
 /// "On-Manifold Preintegration for Real-Time Visual-Inertial Odometry").
@@ -9,8 +13,16 @@ use slam_core::SO3;
 /// bias update (e.g. from the backend optimizer) can cheaply correct the
 /// preintegrated values without re-integrating from scratch.
 ///
-/// Covariance propagation (needed to weight IMU factors in the backend) is
-/// deferred to M5, where it has an actual consumer — see `memory/decisions`.
+/// Also propagates the 9x9 covariance of the `[rotation; velocity;
+/// position]` error state (`plan/STAGE6.md` M2, `memory/decisions/0022` —
+/// closing the gap Stage 1 M5's own deferral and Stage 2 M6's
+/// `decisions/0016` both left open: weighting IMU factors with real
+/// propagated uncertainty instead of ad hoc constants). Uses the same
+/// per-step state-transition recursion Forster et al. themselves publish,
+/// re-derived here against this struct's own exact discretization (not
+/// copied from a generic table) the same way `slam_optim::imu_factor`'s
+/// analytic residual Jacobian was — see that module's own doc comment for
+/// why re-deriving against the specific convention in use matters.
 #[derive(Debug, Clone)]
 pub struct Preintegration {
     bias_gyro_lin: Vector3<f64>,
@@ -26,10 +38,25 @@ pub struct Preintegration {
     d_velocity_d_bias_accel: Matrix3<f64>,
     d_position_d_bias_gyro: Matrix3<f64>,
     d_position_d_bias_accel: Matrix3<f64>,
+
+    /// Continuous-time raw gyro/accel measurement noise density
+    /// (`sensor.yaml`'s own `gyroscope_noise_density`/
+    /// `accelerometer_noise_density` units: rad/s/sqrt(Hz),
+    /// m/s^2/sqrt(Hz)) — the per-step discrete noise covariance used by
+    /// covariance propagation is `density^2 / dt` (standard continuous-
+    /// to-discrete white noise conversion), *not* `density^2 * dt` (that's
+    /// the *integrated*-noise/random-walk scaling `decisions/0016`'s own
+    /// `bias_gyro_rw_weight` derivation already uses correctly for a
+    /// different quantity — easy to mix the two up, so named explicitly
+    /// here rather than left as a bare `f64` parameter at each call site).
+    gyro_noise_density: f64,
+    accel_noise_density: f64,
+
+    covariance: Covariance9,
 }
 
 impl Preintegration {
-    pub fn new(bias_gyro_lin: Vector3<f64>, bias_accel_lin: Vector3<f64>) -> Self {
+    pub fn new(bias_gyro_lin: Vector3<f64>, bias_accel_lin: Vector3<f64>, gyro_noise_density: f64, accel_noise_density: f64) -> Self {
         Preintegration {
             bias_gyro_lin,
             bias_accel_lin,
@@ -42,6 +69,9 @@ impl Preintegration {
             d_velocity_d_bias_accel: Matrix3::zeros(),
             d_position_d_bias_gyro: Matrix3::zeros(),
             d_position_d_bias_accel: Matrix3::zeros(),
+            gyro_noise_density,
+            accel_noise_density,
+            covariance: Covariance9::zeros(),
         }
     }
 
@@ -66,6 +96,37 @@ impl Preintegration {
         let w_dt = w * dt;
         let delta_r_step = SO3::exp(w_dt);
         let jr = SO3::right_jacobian(w_dt);
+
+        // Covariance propagation: Sigma_{k+1} = A*Sigma_k*A^T + B*Sigma_eta*B^T.
+        // `A`/`B` derived by perturbing this exact update (see the module
+        // doc comment); computed *before* `d_rotation_d_bias_gyro` is
+        // overwritten below, since `A`/`B` only need `r_old`/`a`/`w_dt`,
+        // not the bias Jacobians themselves.
+        let mut a_mat = SMatrix::<f64, 9, 9>::zeros();
+        let exp_neg_wdt = SO3::exp(-w_dt).matrix();
+        let neg_r_old_ahat_dt = -r_old * a_hat * dt;
+        a_mat.fixed_view_mut::<3, 3>(0, 0).copy_from(&exp_neg_wdt);
+        a_mat.fixed_view_mut::<3, 3>(3, 0).copy_from(&neg_r_old_ahat_dt);
+        a_mat.fixed_view_mut::<3, 3>(3, 3).copy_from(&Matrix3::identity());
+        a_mat.fixed_view_mut::<3, 3>(6, 0).copy_from(&(0.5 * dt * neg_r_old_ahat_dt));
+        a_mat.fixed_view_mut::<3, 3>(6, 3).copy_from(&(Matrix3::identity() * dt));
+        a_mat.fixed_view_mut::<3, 3>(6, 6).copy_from(&Matrix3::identity());
+
+        let mut b_mat = SMatrix::<f64, 9, 6>::zeros();
+        b_mat.fixed_view_mut::<3, 3>(0, 0).copy_from(&(-jr * dt));
+        b_mat.fixed_view_mut::<3, 3>(3, 3).copy_from(&(-r_old * dt));
+        b_mat.fixed_view_mut::<3, 3>(6, 3).copy_from(&(-0.5 * r_old * dt * dt));
+
+        let mut sigma_eta = Matrix6::<f64>::zeros();
+        let gyro_var = self.gyro_noise_density * self.gyro_noise_density / dt;
+        let accel_var = self.accel_noise_density * self.accel_noise_density / dt;
+        for k in 0..3 {
+            sigma_eta[(k, k)] = gyro_var;
+            sigma_eta[(3 + k, 3 + k)] = accel_var;
+        }
+
+        self.covariance = a_mat * self.covariance * a_mat.transpose() + b_mat * sigma_eta * b_mat.transpose();
+
         self.d_rotation_d_bias_gyro = delta_r_step.matrix().transpose() * self.d_rotation_d_bias_gyro - jr * dt;
         self.delta_rotation = self.delta_rotation.compose(&delta_r_step);
 
@@ -106,6 +167,46 @@ impl Preintegration {
         self.d_position_d_bias_accel
     }
 
+    /// The 9x9 covariance of the `[rotation; velocity; position]` error
+    /// state, from propagating raw gyro/accel measurement noise alone
+    /// (`gyro_noise_density`/`accel_noise_density`, assuming perfectly
+    /// known bias) — see `total_covariance` for the version that also
+    /// includes bias *uncertainty*'s own contribution, the specific gap
+    /// `decisions/0016` found missing from the simpler formula it tried
+    /// and reverted.
+    pub fn covariance(&self) -> Covariance9 {
+        self.covariance
+    }
+
+    /// `covariance()` plus bias uncertainty's own contribution, propagated
+    /// through the same bias Jacobians `corrected()` already uses —
+    /// `bias_gyro_rw_density`/`bias_accel_rw_density` are `sensor.yaml`'s
+    /// own random-walk densities (already used by `SolverConfig`'s
+    /// `bias_gyro_rw_weight`/`bias_accel_rw_weight`, same units); bias
+    /// variance accumulated since the linearization point is modeled as
+    /// `density^2 * elapsed` (standard random-walk variance growth, the
+    /// same scaling `solver_config_from_sensor_noise` already uses for
+    /// the bias-random-walk *factor*'s own weight — reused here for a
+    /// different purpose: how much that same growing uncertainty should
+    /// discount trust in *this* preintegration's own rotation/velocity/
+    /// position prediction).
+    pub fn total_covariance(&self, bias_gyro_rw_density: f64, bias_accel_rw_density: f64) -> Covariance9 {
+        let bg_var = bias_gyro_rw_density * bias_gyro_rw_density * self.elapsed;
+        let ba_var = bias_accel_rw_density * bias_accel_rw_density * self.elapsed;
+
+        let mut j_bg = SMatrix::<f64, 9, 3>::zeros();
+        j_bg.fixed_view_mut::<3, 3>(0, 0).copy_from(&self.d_rotation_d_bias_gyro);
+        j_bg.fixed_view_mut::<3, 3>(3, 0).copy_from(&self.d_velocity_d_bias_gyro);
+        j_bg.fixed_view_mut::<3, 3>(6, 0).copy_from(&self.d_position_d_bias_gyro);
+
+        let mut j_ba = SMatrix::<f64, 9, 3>::zeros();
+        // Rotation doesn't depend on accel bias (rows 0..3 stay zero).
+        j_ba.fixed_view_mut::<3, 3>(3, 0).copy_from(&self.d_velocity_d_bias_accel);
+        j_ba.fixed_view_mut::<3, 3>(6, 0).copy_from(&self.d_position_d_bias_accel);
+
+        self.covariance + j_bg * (bg_var * Matrix3::identity()) * j_bg.transpose() + j_ba * (ba_var * Matrix3::identity()) * j_ba.transpose()
+    }
+
     /// First-order-corrected preintegrated rotation/velocity/position for a
     /// bias estimate near (not necessarily equal to) the linearization
     /// point this preintegration was integrated with.
@@ -138,7 +239,7 @@ mod tests {
         let dt = 0.005;
         let steps = 400; // 2 seconds at 200Hz, matching EuRoC's imu0 rate.
 
-        let mut pre = Preintegration::new(Vector3::zeros(), Vector3::zeros());
+        let mut pre = Preintegration::new(Vector3::zeros(), Vector3::zeros(), 0.0, 0.0);
         for _ in 0..steps {
             pre.integrate_measurement(w, Vector3::zeros(), dt);
         }
@@ -156,7 +257,7 @@ mod tests {
         let steps = 400;
         let t = steps as f64 * dt;
 
-        let mut pre = Preintegration::new(Vector3::zeros(), Vector3::zeros());
+        let mut pre = Preintegration::new(Vector3::zeros(), Vector3::zeros(), 0.0, 0.0);
         for _ in 0..steps {
             pre.integrate_measurement(Vector3::zeros(), a, dt);
         }
@@ -190,7 +291,7 @@ mod tests {
         bias_gyro: Vector3<f64>,
         bias_accel: Vector3<f64>,
     ) -> Preintegration {
-        let mut pre = Preintegration::new(bias_gyro, bias_accel);
+        let mut pre = Preintegration::new(bias_gyro, bias_accel, 0.0, 0.0);
         for &(w, a) in measurements {
             pre.integrate_measurement(w, a, dt);
         }
@@ -232,6 +333,87 @@ mod tests {
             let (_, pred_v, pred_p) = base.corrected(bg0, ba0 + d_ba);
             assert_relative_eq!(pred_v, perturbed.delta_velocity(), epsilon = 1e-4);
             assert_relative_eq!(pred_p, perturbed.delta_position(), epsilon = 1e-4);
+        }
+    }
+
+    /// Covariance propagation's own correctness check: Monte Carlo. Draw
+    /// many independent noisy measurement streams (same nominal gyro/accel,
+    /// independent per-step noise at the configured density), preintegrate
+    /// each, and confirm the *sample* covariance of the resulting [rotation
+    /// (as a small-angle vector relative to the noise-free mean);
+    /// velocity; position] matches the *analytically propagated* one —
+    /// the same "don't trust a hand derivation blindly" discipline
+    /// `slam_optim::imu_factor`'s analytic Jacobian used, adapted to a
+    /// covariance (not a point Jacobian): there's no single "finite
+    /// difference" oracle for covariance, so Monte Carlo sampling is the
+    /// equivalent cross-check.
+    #[test]
+    fn covariance_matches_monte_carlo_sampling() {
+        let gyro_density = 0.01; // rad/s/sqrt(Hz), same order as EuRoC's ADIS16448.
+        let accel_density = 0.02; // m/s^2/sqrt(Hz).
+        let dt = 0.005;
+        let steps = 40; // 0.2s — short enough for many trials to run fast.
+        let w_nominal = Vector3::new(0.2, -0.1, 0.15);
+        let a_nominal = Vector3::new(0.3, -0.2, 9.7);
+
+        let mut noise_free = Preintegration::new(Vector3::zeros(), Vector3::zeros(), gyro_density, accel_density);
+        for _ in 0..steps {
+            noise_free.integrate_measurement(w_nominal, a_nominal, dt);
+        }
+        let analytic_cov = noise_free.covariance();
+
+        let trials = 4000;
+        let mut seed = 999u64;
+        let mut next_gaussian = || -> f64 {
+            // Box-Muller, using the same LCG pattern already used
+            // throughout this crate's own randomized tests.
+            let mut u1 = 0.0;
+            while u1 <= 1e-12 {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                u1 = (seed >> 33) as f64 / (1u64 << 31) as f64;
+            }
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let u2 = (seed >> 33) as f64 / (1u64 << 31) as f64;
+            (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
+        };
+
+        let gyro_sigma = gyro_density / dt.sqrt();
+        let accel_sigma = accel_density / dt.sqrt();
+
+        let mut sum = SMatrix::<f64, 9, 1>::zeros();
+        let mut sum_outer = SMatrix::<f64, 9, 9>::zeros();
+        for _ in 0..trials {
+            let mut pre = Preintegration::new(Vector3::zeros(), Vector3::zeros(), gyro_density, accel_density);
+            for _ in 0..steps {
+                let gyro_noise = Vector3::new(next_gaussian(), next_gaussian(), next_gaussian()) * gyro_sigma;
+                let accel_noise = Vector3::new(next_gaussian(), next_gaussian(), next_gaussian()) * accel_sigma;
+                pre.integrate_measurement(w_nominal + gyro_noise, a_nominal + accel_noise, dt);
+            }
+            let drot = (noise_free.delta_rotation().inverse().compose(&pre.delta_rotation())).log();
+            let dvel = pre.delta_velocity() - noise_free.delta_velocity();
+            let dpos = pre.delta_position() - noise_free.delta_position();
+            let mut sample = SMatrix::<f64, 9, 1>::zeros();
+            sample.fixed_view_mut::<3, 1>(0, 0).copy_from(&drot);
+            sample.fixed_view_mut::<3, 1>(3, 0).copy_from(&dvel);
+            sample.fixed_view_mut::<3, 1>(6, 0).copy_from(&dpos);
+            sum += sample;
+            sum_outer += sample * sample.transpose();
+        }
+        let mean = sum / (trials as f64);
+        let sample_cov = sum_outer / (trials as f64) - mean * mean.transpose();
+
+        // Loose tolerance: Monte Carlo with 4000 trials has real sampling
+        // noise (relative error ~ 1/sqrt(2*trials) ~ 1.8% per entry for a
+        // chi-square-ish quantity, more for smaller/near-zero entries) —
+        // this test is checking the propagation is in the right ballpark
+        // and has the right *shape* (diagonal terms in particular), not
+        // exact agreement to many digits.
+        for k in 0..9 {
+            let a = analytic_cov[(k, k)];
+            let s = sample_cov[(k, k)];
+            assert!(a > 0.0, "diagonal covariance entry {k} should be positive, got {a}");
+            let rel_err = (a - s).abs() / a;
+            assert!(rel_err < 0.35, "diagonal entry {k}: analytic={a:.6e} monte_carlo={s:.6e} rel_err={rel_err:.3}");
         }
     }
 }

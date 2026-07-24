@@ -57,14 +57,35 @@ pub struct PriorFactor {
 }
 
 /// Information weights for each residual type, plus the Huber threshold
-/// for reprojection residuals. `Default` gives the original ad hoc
-/// (isotropic, hand-picked) values `plan/STAGE1.md` earmarked for
-/// replacement; `from_sensor_noise` (Stage 2 M6, finishing Stage 1's M10)
-/// derives them from `sensor.yaml`'s real noise densities instead — see
-/// its own doc comment for the derivation and its scope (a documented
-/// approximation, not full nonlinear covariance propagation through
-/// preintegration, which remains a separate, larger deferred item, same
-/// spirit as `decisions/0006`'s numerical-vs-analytic-Jacobian tradeoff).
+/// for reprojection residuals. `Default` gives ad hoc (isotropic, hand-
+/// picked) values throughout; `from_sensor_noise` (Stage 2 M6, finishing
+/// Stage 1's M10) derives the reprojection/bias-random-walk weights from
+/// `sensor.yaml`'s real noise densities.
+///
+/// **`imu_rotation_weight`/`imu_velocity_weight`/`imu_position_weight`
+/// are deliberately left at `Default`'s ad hoc values, not derived from
+/// physics at all** — `plan/STAGE6.md` M2 tried replacing them with a
+/// *per-factor* information matrix from each factor's own
+/// `Preintegration::total_covariance` (real EuRoC ADIS16448 noise
+/// densities, real bias-uncertainty growth) and measured a severe,
+/// consistent regression: bounded-clip ATE rmse got worse on 4 of 5
+/// sequences, up to +101% (`MH_05_difficult`, 0.597m -> 1.201m).
+/// Root cause, confirmed by direct measurement (`memory/decisions/0024`):
+/// the real covariance-derived weights are 30-166x more confident than
+/// these ad hoc scalars (e.g. rotation sqrt-weight ~8321 vs this field's
+/// implied 50, for a representative 0.5s keyframe interval) — physically
+/// accurate for a *single* preintegration step in isolation, but it makes
+/// the solver trust short-horizon IMU-only propagation far more than
+/// vision, which drifts unboundedly once bias/vision-track errors
+/// accumulate between corrections. Reverting to these ad hoc scalars
+/// recovered (and on 2 of 5 sequences slightly beat) the pre-M2
+/// baseline. This is the same failure mode `decisions/0016` already
+/// found and reverted for the bias-random-walk weights below —
+/// physically-derived per-factor IMU weighting is a second instance of
+/// it. `Preintegration::covariance()`/`total_covariance()` themselves are
+/// kept (validated via Monte Carlo, `slam-imu`'s own tests) as
+/// infrastructure for future uncertainty-aware work, just not wired into
+/// this solver's weighting.
 #[derive(Debug, Clone, Copy)]
 pub struct SolverConfig {
     pub max_iterations: usize,
@@ -74,19 +95,17 @@ pub struct SolverConfig {
     /// Huber threshold, in *weighted*
     /// (`sqrt(reprojection_weight)`-scaled) residual-norm units.
     pub huber_delta: f64,
-    pub imu_rotation_weight: f64,
-    pub imu_velocity_weight: f64,
-    pub imu_position_weight: f64,
     /// Weight for the 3 gyro-bias components of the 6-dim bias-random-
     /// walk residual (`bias_random_walk_residual_jacobian`'s first half).
     pub bias_gyro_rw_weight: f64,
     /// Weight for the 3 accel-bias components (the residual's second
     /// half) — kept separate from `bias_gyro_rw_weight` since gyro-bias
     /// and accel-bias random walk are physically distinct processes with
-    /// different `sensor.yaml` noise densities and natural scales;
-    /// lumping them under one scalar (the pre-M6 scheme) was itself part
-    /// of the ad hoc weighting this milestone replaces.
+    /// different `sensor.yaml` noise densities and natural scales.
     pub bias_accel_rw_weight: f64,
+    pub imu_rotation_weight: f64,
+    pub imu_velocity_weight: f64,
+    pub imu_position_weight: f64,
 }
 
 impl Default for SolverConfig {
@@ -105,13 +124,14 @@ impl Default for SolverConfig {
     }
 }
 
-/// Derives `SolverConfig`'s *reprojection and bias-random-walk* weights
-/// from `sensor.yaml`'s real noise densities (Stage 2 M6, finishing Stage
-/// 1's M10, replacing the ad hoc `Default` values for just these two
-/// residual types — see below for why the IMU rotation/velocity/position
-/// weights are deliberately *not* included). `max_iterations`/
-/// `initial_lambda`/`huber_delta` are solver-behavior knobs, not noise
-/// weights, so they're left at `Default`'s tuned values.
+/// Derives `SolverConfig`'s *reprojection and bias-random-walk weight*
+/// fields from `sensor.yaml`'s real noise densities (Stage 2 M6, finishing
+/// Stage 1's M10, replacing the ad hoc `Default` values for these residual
+/// types). `max_iterations`/`initial_lambda`/`huber_delta`/the IMU
+/// rotation-velocity-position weights are solver-behavior knobs (or,
+/// for the IMU weights, deliberately ad hoc — see `SolverConfig`'s own
+/// doc comment), not noise weights, so they're left at `Default`'s tuned
+/// values.
 ///
 /// `reprojection_weight` is a direct, low-risk conversion: assumed pixel
 /// measurement noise (`pixel_noise_std`) divided by the camera's own
@@ -122,22 +142,6 @@ impl Default for SolverConfig {
 /// to `sensor.yaml`'s own random-walk densities — directly what those
 /// densities describe (bias uncertainty growth over time), so this
 /// approximation is sound for them specifically.
-///
-/// **`imu_rotation_weight`/`imu_velocity_weight`/`imu_position_weight`
-/// are deliberately left at `Default`'s ad hoc values, not derived here**
-/// — tried and measured to regress real accuracy: applying the same
-/// "integrated white noise, over a representative dt" formula to the
-/// gyro/accel *noise density* (not random walk) for these three ignores
-/// gyro/accel *bias uncertainty*'s contribution to preintegration error
-/// entirely (a real term the full nonlinear preintegration covariance
-/// `decisions/0006` deferred would include, via `Preintegration`'s own
-/// bias Jacobians) — the resulting weights were orders of magnitude more
-/// "confident" than the tuned ad hoc values, and on real MH_02/MH_03 data
-/// this measurably regressed ATE (MH_03 more than doubled, 0.511m ->
-/// 1.045m) despite improving MH_01/04/05. Properly deriving these three
-/// needs the full covariance propagation, not this simpler formula — the
-/// same correctness-risk profile `decisions/0006` deferred for the IMU
-/// factor's Jacobian, left as a real, separate, larger undertaking.
 pub fn solver_config_from_sensor_noise(gyro_random_walk: f64, accel_random_walk: f64, camera_fu: f64, dt_keyframe: f64, pixel_noise_std: f64) -> SolverConfig {
     let sigma_normalized = pixel_noise_std / camera_fu;
     let sigma_bias_gyro2 = gyro_random_walk * gyro_random_walk * dt_keyframe;
@@ -493,8 +497,10 @@ mod tests {
         assert!(shorter_focal.reprojection_weight < long.reprojection_weight);
 
         // The three IMU pose/velocity weights are deliberately left at
-        // Default's values (see this function's own doc comment for why)
-        // — not affected by any of these inputs.
+        // Default's values (see `SolverConfig`'s own doc comment for why
+        // — `plan/STAGE6.md` M2 tried deriving them from real covariance
+        // and measured a regression) — not affected by any of these
+        // inputs.
         assert_eq!(long.imu_rotation_weight, SolverConfig::default().imu_rotation_weight);
         assert_eq!(long.imu_velocity_weight, SolverConfig::default().imu_velocity_weight);
         assert_eq!(long.imu_position_weight, SolverConfig::default().imu_position_weight);
@@ -530,7 +536,7 @@ mod tests {
 
         let mut imu_factors = Vec::new();
         for k in 0..num_keyframes - 1 {
-            let mut pre = Preintegration::new(Vector3::zeros(), Vector3::zeros());
+            let mut pre = Preintegration::new(Vector3::zeros(), Vector3::zeros(), 1.6968e-4, 2.0000e-3);
             let steps = (dt_keyframe / dt_step) as usize;
             for s in 0..steps {
                 let t = k as f64 * dt_keyframe + s as f64 * dt_step;
@@ -634,7 +640,7 @@ mod tests {
 
         let mut imu_factors = Vec::new();
         for k in 0..num_keyframes - 1 {
-            let mut pre = Preintegration::new(Vector3::zeros(), Vector3::zeros());
+            let mut pre = Preintegration::new(Vector3::zeros(), Vector3::zeros(), 1.6968e-4, 2.0000e-3);
             let steps = (dt_keyframe / dt_step) as usize;
             for s in 0..steps {
                 let t = k as f64 * dt_keyframe + s as f64 * dt_step;

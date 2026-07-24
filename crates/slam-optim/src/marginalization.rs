@@ -155,17 +155,95 @@ pub fn marginalize_keyframe(input: &MarginalizationInput) -> Option<PriorFactor>
     let b_k1 = b.fixed_rows::<STATE_DIM>(STATE_DIM).into_owned();
 
     let h_kk_reg = h_kk + SMatrix::<f64, STATE_DIM, STATE_DIM>::identity() * 1e-9;
-    let h_kk_inv = h_kk_reg.try_inverse()?;
+    let (h_kk_inv_h_kk1, h_kk_inv_b_k) = jacobi_scaled_solve(&h_kk_reg, &h_kk1, &b_k)?;
 
-    let information = h_k1k1 - h_k1k * h_kk_inv * h_kk1;
-    let information_vector = b_k1 - h_k1k * h_kk_inv * b_k;
+    let information = h_k1k1 - h_k1k * h_kk_inv_h_kk1;
+    let information_vector = b_k1 - h_k1k * h_kk_inv_b_k;
 
     Some(PriorFactor {
         keyframe_idx: 0,
         linearization_point: input.state_k1,
-        information,
+        information: project_onto_psd_cone(&information),
         information_vector,
     })
+}
+
+/// Solves `h_kk_reg * X = rhs_mat` and `h_kk_reg * y = rhs_vec` via Jacobi
+/// (diagonal) preconditioning + Cholesky, instead of forming `h_kk_reg`'s
+/// inverse explicitly and multiplying. Discovered necessary while
+/// `plan/STAGE6.md` M2 was still trying real per-factor IMU covariance
+/// weighting, which put bias-block diagonal entries around 1e-9 right
+/// next to reprojection-derived pose-block entries around 1e5-1e6 in
+/// `h_kk_reg` (a ~1e14-15 dynamic range) — solving directly (via Cholesky
+/// on the *scaled*, well-conditioned matrix) avoids the extra error a
+/// full matrix inversion adds on top of that ill-conditioning. That
+/// covariance-based weighting was itself later reverted
+/// (`memory/decisions/0024`: it regressed real accuracy), so today's ad
+/// hoc IMU weights don't exercise this extreme a dynamic range — this
+/// fix is kept anyway as defense in depth, since it's strictly more
+/// numerically sound than a plain inverse regardless of what weighting
+/// scheme feeds it, and costs nothing. `h_kk_reg` is symmetric PD by
+/// construction (a sum of `J^T J` terms plus regularization), so
+/// Cholesky is the right decomposition, not plain LU (see
+/// `project_onto_psd_cone`'s doc comment for the residual error this
+/// alone doesn't fully eliminate).
+fn jacobi_scaled_solve(h_kk_reg: &SMatrix<f64, STATE_DIM, STATE_DIM>, rhs_mat: &SMatrix<f64, STATE_DIM, STATE_DIM>, rhs_vec: &SVector<f64, STATE_DIM>) -> Option<(SMatrix<f64, STATE_DIM, STATE_DIM>, SVector<f64, STATE_DIM>)> {
+    let d_inv = SVector::<f64, STATE_DIM>::from_fn(|i, _| 1.0 / h_kk_reg[(i, i)].max(1e-300).sqrt());
+    let scaled = SMatrix::<f64, STATE_DIM, STATE_DIM>::from_fn(|r, c| h_kk_reg[(r, c)] * d_inv[r] * d_inv[c]);
+    let chol = scaled.cholesky()?;
+
+    let scaled_rhs_mat = SMatrix::<f64, STATE_DIM, STATE_DIM>::from_fn(|r, c| rhs_mat[(r, c)] * d_inv[r]);
+    let solved_mat = chol.solve(&scaled_rhs_mat);
+    let x_mat = SMatrix::<f64, STATE_DIM, STATE_DIM>::from_fn(|r, c| solved_mat[(r, c)] * d_inv[r]);
+
+    let scaled_rhs_vec = rhs_vec.component_mul(&d_inv);
+    let solved_vec = chol.solve(&scaled_rhs_vec);
+    let x_vec = solved_vec.component_mul(&d_inv);
+
+    Some((x_mat, x_vec))
+}
+
+/// Guarantees `m` (assumed symmetric up to floating-point noise) is
+/// positive-semidefinite by shifting its whole spectrum up by a uniform
+/// amount, not by reconstructing it from a full eigendecomposition. A
+/// marginal information matrix (the Schur complement of a PSD joint
+/// Hessian) is PSD in exact arithmetic, but while `plan/STAGE6.md` M2 was
+/// still trying real per-factor IMU covariance weighting, `h_kk`'s
+/// inversion mixed reprojection-scale information
+/// (`config.reprojection_weight`, ~1e5-1e6) with that weighting's
+/// bias-block entries (as small as ~1e-9) — a ~1e14-15 dynamic range in
+/// one matrix, right at double-precision's own limit, which produced
+/// small but real negative eigenvalues under
+/// `imu_plus_unique_landmarks_marginalization_prior_alone_recovers_
+/// ground_truth_k1`'s realistic-noise-density test (caught by that test,
+/// not assumed) — left unfixed, `solver::compute_cost`'s quadratic form
+/// in `delta` is unbounded below along a negative-eigenvalue direction,
+/// which is exactly what turned one LM step into a divergence to
+/// nonsense states. The covariance-based weighting was later reverted
+/// (`memory/decisions/0024`: it regressed real accuracy on its own
+/// terms), so today's ad hoc IMU weights don't reach this extreme a
+/// dynamic range — this guard is kept anyway as defense in depth against
+/// any future weighting scheme (or config) that does.
+///
+/// A first attempt reconstructed via `V * clip(Λ, 0) * V^T` (the textbook
+/// PSD projection) and made a *different*, previously-passing test worse
+/// (a large spurious rotation error, not just noise) — this matrix's
+/// eigenvalues cluster tightly near zero across several of its 15
+/// dimensions (bias directions are only weakly observable from a single
+/// short IMU edge, so this is a real, physically-expected near-null
+/// subspace, not a code bug), and reconstructing from *that* subspace's
+/// near-arbitrary eigenvectors scrambles information the diagonal-only
+/// shift below never touches. Uniformly shifting every eigenvalue by the
+/// same amount needs only the *smallest* eigenvalue, not the full
+/// eigenbasis, and leaves every other direction's information exactly as
+/// computed.
+fn project_onto_psd_cone(m: &SMatrix<f64, STATE_DIM, STATE_DIM>) -> SMatrix<f64, STATE_DIM, STATE_DIM> {
+    let symmetric = (m + m.transpose()) * 0.5;
+    let min_eigenvalue = symmetric.symmetric_eigenvalues().min();
+    if min_eigenvalue >= 0.0 {
+        return symmetric;
+    }
+    symmetric + SMatrix::<f64, STATE_DIM, STATE_DIM>::identity() * (-min_eigenvalue + 1e-12)
 }
 
 #[cfg(test)]
@@ -204,7 +282,7 @@ mod tests {
         let true_states: Vec<KeyframeState> = (0..4).map(|k| true_state_at(k as f64 * dt_keyframe)).collect();
 
         let preint_between = |k: usize| {
-            let mut pre = Preintegration::new(Vector3::zeros(), Vector3::zeros());
+            let mut pre = Preintegration::new(Vector3::zeros(), Vector3::zeros(), 1.6968e-4, 2.0000e-3);
             let steps = (dt_keyframe / dt_step) as usize;
             for s in 0..steps {
                 let t = k as f64 * dt_keyframe + s as f64 * dt_step;
@@ -382,7 +460,7 @@ mod tests {
         let true_state_at = |t: f64| KeyframeState::new(body_pose_at(t).inverse(), v_true, Vector3::zeros(), Vector3::zeros());
         let true_states: Vec<KeyframeState> = (0..2).map(|k| true_state_at(k as f64 * dt_keyframe)).collect();
 
-        let mut preint = Preintegration::new(Vector3::zeros(), Vector3::zeros());
+        let mut preint = Preintegration::new(Vector3::zeros(), Vector3::zeros(), 1.6968e-4, 2.0000e-3);
         let steps = (dt_keyframe / dt_step) as usize;
         for s in 0..steps {
             let t = s as f64 * dt_step;
@@ -434,7 +512,7 @@ mod tests {
         let true_state_at = |t: f64| KeyframeState::new(body_pose_at(t).inverse(), v_true, Vector3::zeros(), Vector3::zeros());
         let true_states: Vec<KeyframeState> = (0..2).map(|k| true_state_at(k as f64 * dt_keyframe)).collect();
 
-        let mut preint = Preintegration::new(Vector3::zeros(), Vector3::zeros());
+        let mut preint = Preintegration::new(Vector3::zeros(), Vector3::zeros(), 1.6968e-4, 2.0000e-3);
         let steps = (dt_keyframe / dt_step) as usize;
         for s in 0..steps {
             let t = s as f64 * dt_step;

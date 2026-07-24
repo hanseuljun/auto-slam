@@ -208,6 +208,42 @@ re-measures on all 5 sequences, bounded and full, both ATE metrics.
   improve on every sequence, that's a real result to document
   honestly (matching `decisions/0016`-`0017`'s own precedent), not a
   reason to force it in.
+- **Result**: built and validated `Preintegration::covariance()`/
+  `total_covariance()` (Forster et al.'s recursion, Monte Carlo test
+  passed on the first try) — kept as infrastructure. Wired it into the
+  solver/marginalization as a per-factor information matrix replacing the
+  3 ad hoc IMU weight scalars, and measured a severe, consistent
+  regression, matching `decisions/0016`-`0017`'s own precedent: bounded-
+  clip ATE rmse got worse on 4 of 5 sequences, up to **+101%**
+  (`MH_05_difficult`, 0.597m -> 1.201m).
+
+  | sequence | bounded: M1 baseline | M2 covariance-weighted | M2 reverted |
+  |---|---|---|---|
+  | MH_01_easy | 0.155m | 0.177m (+14.2%) | 0.162m (+4.5%) |
+  | MH_02_easy | 0.207m | 0.201m (-2.9%) | 0.198m (-4.3%) |
+  | MH_03_medium | 0.893m | 1.267m (+41.9%) | 0.768m (-14.0%) |
+  | MH_04_difficult | 1.005m | 1.672m (+66.4%) | 1.180m (+17.4%) |
+  | MH_05_difficult | 0.597m | 1.201m (+101.2%) | 0.632m (+5.9%) |
+
+  Root cause, confirmed by direct measurement: real EuRoC noise densities
+  make the solver 30-166x more confident in a single short IMU interval
+  than the old ad hoc scalars were (e.g. rotation sqrt-weight ~8321 vs
+  ~50 for a representative 0.5s interval), which over-trusts IMU-only
+  propagation relative to vision and lets drift compound unboundedly
+  between corrections — physically accurate in isolation, not more
+  accurate for this pipeline. **Reverted the weighting** (restored the ad
+  hoc scalars), confirmed this alone recovers accuracy (full-sequence
+  whole-trajectory ATE rmse: 4.031/4.528/3.562/6.165/6.648m vs baseline
+  4.061/4.149/3.593/6.456/6.691m — flat within normal run-to-run
+  variance), and removed `imu_factor_sqrt_information_diagonal` as dead
+  code. `Preintegration::covariance()` itself stays available for M5/M6.
+  Along the way, the covariance-weighted experiment surfaced (and this
+  milestone fixed, kept as defense in depth) a real marginalization
+  numerical-stability bug: an extreme information-scale mismatch produced
+  negative eigenvalues in the marginal prior, which made `compute_cost`'s
+  quadratic form unbounded below and one LM step diverge to a velocity of
+  ~9573 m/s. Full reasoning, the dead-end tried along the way, and every
+  number: `memory/decisions/0024`.
 
 ### M3 — Goal 2: a real sparse pose-graph solver
 

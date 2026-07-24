@@ -48,7 +48,10 @@ fn body_pose_in_world(pose_world_to_cam0: &SE3, t_bs_cam0: &SE3) -> SE3 {
 
 /// Preintegrates the raw IMU samples falling within `[t_start, t_end]`.
 fn preintegrate_between(imu_samples: &[ImuSample], t_start: u64, t_end: u64, bias_gyro: Vector3<f64>, bias_accel: Vector3<f64>) -> Preintegration {
-    let mut pre = Preintegration::new(bias_gyro, bias_accel);
+    // Noise densities 0.0: this initializer only ever reads the mean
+    // (bias-corrected) preintegrated values, never `.covariance()` — no
+    // consumer here for the covariance `plan/STAGE6.md` M2 added.
+    let mut pre = Preintegration::new(bias_gyro, bias_accel, 0.0, 0.0);
     let in_range: Vec<&ImuSample> = imu_samples
         .iter()
         .filter(|s| s.timestamp_ns >= t_start && s.timestamp_ns <= t_end)

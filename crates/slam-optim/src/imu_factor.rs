@@ -140,6 +140,7 @@ fn jacobian_inverse(m: Matrix3<f64>) -> Matrix3<f64> {
     m.try_inverse().expect("SO3 left/right Jacobian should be invertible away from theta = 2*pi*n")
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,7 +171,9 @@ mod tests {
         let rate_hz = 200.0;
         let steps = (dt_total * rate_hz) as usize;
         let dt_step = 1.0 / rate_hz;
-        let mut pre = Preintegration::new(Vector3::zeros(), Vector3::zeros());
+        // 0.0 noise density: this test only checks residual correctness,
+        // never reads `.covariance()`.
+        let mut pre = Preintegration::new(Vector3::zeros(), Vector3::zeros(), 0.0, 0.0);
         for i in 0..steps {
             let t = i as f64 * dt_step;
             let r_wb = body_pose_at(t).rotation;
@@ -216,7 +219,9 @@ mod tests {
             state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
             ((state >> 33) as f64 / (1u64 << 31) as f64) - 1.0
         };
-        let mut pre = Preintegration::new(bias_gyro_lin, bias_accel_lin);
+        // 0.0 noise density: this helper feeds Jacobian-correctness tests
+        // only, never reads `.covariance()`.
+        let mut pre = Preintegration::new(bias_gyro_lin, bias_accel_lin, 0.0, 0.0);
         let dt_step = 0.005; // 200Hz, matches EuRoC's imu0 rate.
         for _ in 0..steps {
             let gyro = Vector3::new(next(), next(), next()) * 0.4 + bias_gyro_lin;
@@ -346,7 +351,9 @@ mod tests {
             );
 
             let steps = (dt / 0.005) as usize;
-            let mut pre = Preintegration::new(bias_gyro_lin, bias_accel_lin);
+            // 0.0 noise density: this test only checks residual/Jacobian
+            // correctness, never reads `.covariance()`.
+            let mut pre = Preintegration::new(bias_gyro_lin, bias_accel_lin, 0.0, 0.0);
             for _ in 0..steps {
                 let gyro = Vector3::new(next(0.5), next(0.5), next(0.5)) + bias_gyro_lin;
                 let accel = Vector3::new(next(2.0), next(2.0), next(2.0)) + Vector3::new(0.0, 0.0, 9.81) + bias_accel_lin;
