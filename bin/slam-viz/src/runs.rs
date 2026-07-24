@@ -59,6 +59,7 @@ mod tests {
             num_frames: 10,
             config: RunConfig { window_size: 8, keyframe_stride: 10, huber_delta: 3.0, solver_max_iterations: 6, full_sequence: false, frame_cap: 600 },
             ate: AteStats { rmse: 0.1, mean: 0.1, median: 0.1, std: 0.01, max: 0.2, num_points: 10 },
+            ate_prefix_aligned: None,
             rpe: vec![],
             timing: None,
         }

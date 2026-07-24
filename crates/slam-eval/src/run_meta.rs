@@ -46,6 +46,11 @@ pub struct RunMeta {
     pub num_frames: usize,
     pub config: RunConfig,
     pub ate: AteStats,
+    /// Prefix-aligned ATE (`plan/STAGE5.md` goal 1, `memory/decisions/
+    /// 0020`) — `None` for runs from before this field existed, or where
+    /// no `align_prefix_len` was supplied.
+    #[serde(default)]
+    pub ate_prefix_aligned: Option<AteStats>,
     pub rpe: Vec<RpeStats>,
     pub timing: Option<TimingBreakdown>,
 }
@@ -121,6 +126,7 @@ mod tests {
             num_frames: 600,
             config: RunConfig { window_size: 8, keyframe_stride: 10, huber_delta: 3.0, solver_max_iterations: 6, full_sequence: false, frame_cap: 600 },
             ate: AteStats { rmse: 0.151, mean: 0.122, median: 0.126, std: 0.089, max: 0.350, num_points: 101 },
+            ate_prefix_aligned: Some(AteStats { rmse: 0.160, mean: 0.130, median: 0.128, std: 0.090, max: 0.360, num_points: 101 }),
             rpe: vec![RpeStats { delta: 1, rmse: 0.105, mean: 0.08, median: 0.09, std: 0.03, max: 0.21, num_pairs: 97 }],
             timing: Some(TimingBreakdown { vision_seconds: 13.7, optimization_seconds: 2.6, global_ba_seconds: 2.8, loop_closure_seconds: 0.0, data_seconds: 30.0 }),
         };
@@ -133,8 +139,35 @@ mod tests {
         assert_eq!(read_back.git_commit, meta.git_commit);
         assert_eq!(read_back.config.window_size, meta.config.window_size);
         assert!((read_back.ate.rmse - meta.ate.rmse).abs() < 1e-12);
+        assert!(read_back.ate_prefix_aligned.is_some());
         assert_eq!(read_back.rpe.len(), 1);
         assert!(read_back.timing.is_some());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn reads_old_meta_json_missing_ate_prefix_aligned_without_erroring() {
+        // Real historical runs/<sequence>/<run_id>/meta.json files on disk
+        // predate this field entirely — #[serde(default)] must let them
+        // still deserialize instead of breaking bin/slam-viz's run picker.
+        let dir = std::env::temp_dir().join(format!("slam-eval-test-run-meta-old-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("meta.json");
+        let old_json = r#"{
+            "sequence_name": "MH_01_easy",
+            "run_id": "20260101-000000-000",
+            "timestamp_utc": "2026-01-01T00:00:00Z",
+            "git_commit": null,
+            "num_frames": 600,
+            "config": {"window_size": 8, "keyframe_stride": 10, "huber_delta": 3.0, "solver_max_iterations": 6, "full_sequence": false, "frame_cap": 600},
+            "ate": {"rmse": 0.151, "mean": 0.122, "median": 0.126, "std": 0.089, "max": 0.350, "num_points": 101},
+            "rpe": [],
+            "timing": null
+        }"#;
+        std::fs::write(&path, old_json).unwrap();
+
+        let read_back = read_run_meta(&path).expect("old-format meta.json should still deserialize");
+        assert!(read_back.ate_prefix_aligned.is_none());
         std::fs::remove_dir_all(&dir).ok();
     }
 

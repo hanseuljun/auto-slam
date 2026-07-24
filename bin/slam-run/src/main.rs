@@ -102,6 +102,16 @@ fn main() -> anyhow::Result<()> {
 /// local and a medium-horizon drift picture.
 const RPE_DELTAS: &[usize] = &[1, 10];
 
+/// How much of a run's leading data the honest, prefix-anchored ATE
+/// metric fits its alignment against (`plan/STAGE5.md` goal 1,
+/// `memory/decisions/0020`) — matches the duration this pipeline's own
+/// bounded/fast-iteration mode (`--frames 600`) already uses, reusing an
+/// existing, already-understood magnitude instead of a new one. Measured
+/// (not guessed) to be large enough to avoid the small-window lever-arm
+/// instability a handful of points has, and small enough that later
+/// drift doesn't get the chance to pull the fit.
+const ALIGN_PREFIX_SECONDS: f64 = 30.0;
+
 fn run_sequence(seq_dir: &Path, out_dir: &Path, frame_cap: Option<usize>, run_id: &str, git_commit: Option<&str>) -> anyhow::Result<Option<slam_eval::TrajectoryReport>> {
     let name = seq_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| seq_dir.display().to_string());
     println!("==== {name} ====");
@@ -210,7 +220,18 @@ fn run_sequence(seq_dir: &Path, out_dir: &Path, frame_cap: Option<usize>, run_id
         data_seconds,
     };
 
-    let Some(report) = slam_eval::build_report(&name, &estimated, &groundtruth, RPE_DELTAS, Some(timing)) else {
+    // How many leading keyframes fall within the first ALIGN_PREFIX_SECONDS
+    // of data — the alignment window `ate_prefix_aligned` fits against
+    // (`plan/STAGE5.md` M0/M1, `memory/decisions/0020`). Time-based, not a
+    // fixed keyframe count: track-loss recovery (`plan/STAGE4.md` M2)
+    // forces off-stride keyframes, so keyframe count per second of data
+    // isn't the same across sequences or runs.
+    let align_prefix_len = match timestamps.first() {
+        Some(&t0) => timestamps.iter().take_while(|&&t| (t - t0) as f64 * 1e-9 <= ALIGN_PREFIX_SECONDS).count(),
+        None => 0,
+    };
+
+    let Some(report) = slam_eval::build_report(&name, &estimated, &groundtruth, RPE_DELTAS, Some(timing), Some(align_prefix_len)) else {
         println!("not enough groundtruth-covered keyframes to compute a report ({} keyframes, {} with groundtruth), skipping", before_ba, estimated.len());
         return Ok(None);
     };
@@ -243,6 +264,7 @@ fn run_sequence(seq_dir: &Path, out_dir: &Path, frame_cap: Option<usize>, run_id
             frame_cap: frame_cap.unwrap_or(full_len),
         },
         ate: report.ate,
+        ate_prefix_aligned: report.ate_prefix_aligned,
         rpe: report.rpe.clone(),
         timing: report.timing,
     };
@@ -252,6 +274,12 @@ fn run_sequence(seq_dir: &Path, out_dir: &Path, frame_cap: Option<usize>, run_id
         "{num_frames} frames ({data_seconds:.1}s of data), {before_ba} keyframes ({lost_frames} unrecoverable single frames, {recovered_frames} track-loss recoveries), ATE rmse={:.3}m mean={:.3}m median={:.3}m std={:.3}m max={:.3}m",
         report.ate.rmse, report.ate.mean, report.ate.median, report.ate.std, report.ate.max
     );
+    if let Some(p) = report.ate_prefix_aligned {
+        println!(
+            "  ATE (prefix-aligned, first {ALIGN_PREFIX_SECONDS:.0}s anchors the fit, `plan/STAGE5.md` goal 1): rmse={:.3}m mean={:.3}m median={:.3}m max={:.3}m",
+            p.rmse, p.mean, p.median, p.max
+        );
+    }
     for rpe in &report.rpe {
         println!("  RPE (delta={} keyframes): rmse={:.3}m mean={:.3}m max={:.3}m over {} pairs", rpe.delta, rpe.rmse, rpe.mean, rpe.max, rpe.num_pairs);
     }

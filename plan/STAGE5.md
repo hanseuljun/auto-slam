@@ -195,7 +195,7 @@ declaring done, no milestone closes on an assumed number.
   re-verifies on every sequence once implemented in Rust, per that
   milestone's existing bar.
 
-### M1 — Implement the chosen ATE methodology
+### M1 — Implement the chosen ATE methodology — Done
 
 - Implement M0's decision in `crates/slam-eval` (new function, changed
   default, or both — whatever M0 concluded). If the existing Sim3
@@ -213,6 +213,36 @@ declaring done, no milestone closes on an assumed number.
   drifts late should show small early error and large late error, not
   spread evenly, mirroring `align.rs`'s own existing test-style
   discipline).
+- **Result**: `crates/slam-eval/src/align.rs` gained `compute_ate_
+  prefix_aligned`/`compute_ate_series_prefix_aligned` — same Umeyama
+  machinery, but the transform is fit using only a caller-supplied
+  leading prefix and applied to the whole trajectory. `compute_ate`
+  (whole-trajectory fit) is unchanged and kept, per M0's decision, for
+  continuity with `docs/RESULTS.md`'s existing SOTA comparison table.
+  `TrajectoryReport`/`RunMeta` gained `ate_prefix_aligned: Option<AteStats>`
+  (`#[serde(default)]` on the `RunMeta` field so historical `meta.json`
+  files without it still deserialize — checked directly with a hand-
+  written old-format fixture, not assumed). `bin/slam-run` derives the
+  prefix from the first 30 seconds of *data* (`ALIGN_PREFIX_SECONDS`,
+  time-based, not a fixed keyframe count, since track-loss recovery
+  makes keyframes-per-second inconsistent across runs), computes and
+  prints both metrics, and writes both to `meta.json`/`summary.csv`.
+  New `cargo test` coverage includes the exact synthetic case this
+  milestone's own test criteria calls for (accurate-early/drifts-late
+  trajectory shows near-zero prefix-aligned error early, real growing
+  error late, and *more* early error under whole-trajectory alignment
+  than under prefix-aligned — the masking effect, reproduced
+  deterministically, not just observed on real data). Verified on real
+  data, all 5 sequences, full un-truncated runs: near-t=0 error is small
+  everywhere (MH_01 0.185m, MH_03 0.170m — directly re-checked per-point,
+  not just inferred from the aggregate) and the honest aggregate number
+  is real and larger than today's smoothed one everywhere (MH_01 3.868m
+  -> 5.412m, MH_02 3.854m -> 7.787m, MH_03 3.460m -> 17.180m, MH_04
+  6.600m -> 9.689m, MH_05 6.818m -> 12.945m) — goal 1 met: the metric no
+  longer hides what M0/Finding 1 found, and no longer regresses the
+  bounded-clip numbers either (bounded-clip runs are entirely inside the
+  30s prefix window, so `ate_prefix_aligned` there is numerically
+  identical to `ate`, confirmed on `MH_01_easy`'s own bounded run).
 
 ### M2 — Wire real loop closure into `bin/slam-run`'s actual pipeline
 

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use nalgebra::Vector3;
 
-use crate::align::{compute_ate, AteStats};
+use crate::align::{compute_ate, compute_ate_prefix_aligned, AteStats};
 use crate::rpe::{compute_rpe, RpeStats};
 use crate::timing::TimingBreakdown;
 
@@ -14,7 +14,15 @@ use crate::timing::TimingBreakdown;
 #[derive(Debug, Clone)]
 pub struct TrajectoryReport {
     pub sequence_name: String,
+    /// Whole-trajectory-aligned ATE (`compute_ate`) — kept for continuity
+    /// with `docs/RESULTS.md`'s existing published-SOTA comparison table.
     pub ate: AteStats,
+    /// Prefix-aligned ATE (`compute_ate_prefix_aligned`, `plan/STAGE5.md`
+    /// goal 1) — `None` only when `align_prefix_len` wasn't supplied or
+    /// the trajectory was too short to align at all. This is the honest
+    /// one: near-t=0 error reflects real early accuracy instead of being
+    /// partly absorbed by a whole-trajectory fit (`memory/decisions/0020`).
+    pub ate_prefix_aligned: Option<AteStats>,
     pub rpe: Vec<RpeStats>,
     pub timing: Option<TimingBreakdown>,
 }
@@ -22,12 +30,18 @@ pub struct TrajectoryReport {
 /// Builds a `TrajectoryReport` from timestamp-matched estimated/groundtruth
 /// position pairs (already the intersection actually covered by
 /// groundtruth — see callers' `gt.interpolate` filtering).
-pub fn build_report(sequence_name: &str, estimated: &[Vector3<f64>], groundtruth: &[Vector3<f64>], rpe_deltas: &[usize], timing: Option<TimingBreakdown>) -> Option<TrajectoryReport> {
+/// `align_prefix_len`, if given, is how many leading points
+/// `ate_prefix_aligned` fits its alignment against (`plan/STAGE5.md` M0's
+/// own finding: too small a window is numerically unstable — pass a
+/// bounded, multi-second prefix, not a handful of points).
+pub fn build_report(sequence_name: &str, estimated: &[Vector3<f64>], groundtruth: &[Vector3<f64>], rpe_deltas: &[usize], timing: Option<TimingBreakdown>, align_prefix_len: Option<usize>) -> Option<TrajectoryReport> {
     let ate = compute_ate(estimated, groundtruth)?;
+    let ate_prefix_aligned = align_prefix_len.and_then(|n| compute_ate_prefix_aligned(estimated, groundtruth, n));
     let rpe = rpe_deltas.iter().filter_map(|&delta| compute_rpe(estimated, groundtruth, delta)).collect();
     Some(TrajectoryReport {
         sequence_name: sequence_name.to_string(),
         ate,
+        ate_prefix_aligned,
         rpe,
         timing,
     })
@@ -101,6 +115,9 @@ pub fn write_summary_csv(path: impl AsRef<Path>, reports: &[TrajectoryReport]) -
         "ate_std".to_string(),
         "ate_max".to_string(),
         "num_points".to_string(),
+        "ate_prefix_aligned_rmse".to_string(),
+        "ate_prefix_aligned_mean".to_string(),
+        "ate_prefix_aligned_max".to_string(),
     ];
     for d in &deltas {
         header.push(format!("rpe_rmse_d{d}"));
@@ -118,6 +135,10 @@ pub fn write_summary_csv(path: impl AsRef<Path>, reports: &[TrajectoryReport]) -
             format!("{:.6}", r.ate.max),
             r.ate.num_points.to_string(),
         ];
+        match r.ate_prefix_aligned {
+            Some(p) => row.extend([format!("{:.6}", p.rmse), format!("{:.6}", p.mean), format!("{:.6}", p.max)]),
+            None => row.extend([String::new(), String::new(), String::new()]),
+        }
         for d in &deltas {
             let rmse = r.rpe.iter().find(|s| s.delta == *d).map(|s| s.rmse);
             row.push(rmse.map(|v| format!("{v:.6}")).unwrap_or_default());
@@ -141,12 +162,22 @@ mod tests {
         let n = 20;
         let groundtruth: Vec<Vector3<f64>> = (0..n).map(|i| Vector3::new(i as f64, 0.0, 0.0)).collect();
         let estimated: Vec<Vector3<f64>> = groundtruth.iter().map(|p| p + Vector3::new(0.05, 0.0, 0.0)).collect();
-        let report = build_report("TEST_SEQ", &estimated, &groundtruth, &[1, 5], None).expect("report should build");
+        let report = build_report("TEST_SEQ", &estimated, &groundtruth, &[1, 5], None, None).expect("report should build");
         assert_eq!(report.sequence_name, "TEST_SEQ");
         assert_eq!(report.rpe.len(), 2);
         assert!(report.rpe.iter().any(|s| s.delta == 1));
         assert!(report.rpe.iter().any(|s| s.delta == 5));
         assert!(report.timing.is_none());
+        assert!(report.ate_prefix_aligned.is_none(), "no align_prefix_len given, so this should stay unset");
+    }
+
+    #[test]
+    fn build_report_computes_ate_prefix_aligned_when_a_prefix_len_is_given() {
+        let n = 20;
+        let groundtruth: Vec<Vector3<f64>> = (0..n).map(|i| Vector3::new(i as f64, 0.0, 0.0)).collect();
+        let estimated: Vec<Vector3<f64>> = groundtruth.iter().map(|p| p + Vector3::new(0.05, 0.0, 0.0)).collect();
+        let report = build_report("TEST_SEQ", &estimated, &groundtruth, &[1], None, Some(10)).expect("report should build");
+        assert!(report.ate_prefix_aligned.is_some());
     }
 
     #[test]
@@ -192,8 +223,8 @@ mod tests {
         let groundtruth: Vec<Vector3<f64>> = (0..n).map(|i| Vector3::new(i as f64, 0.0, 0.0)).collect();
         let estimated = groundtruth.clone();
         let timing = TimingBreakdown { vision_seconds: 1.0, optimization_seconds: 2.0, global_ba_seconds: 3.0, loop_closure_seconds: 0.0, data_seconds: 5.0 };
-        let report_a = build_report("SEQ_A", &estimated, &groundtruth, &[1], Some(timing)).unwrap();
-        let report_b = build_report("SEQ_B", &estimated, &groundtruth, &[1], None).unwrap();
+        let report_a = build_report("SEQ_A", &estimated, &groundtruth, &[1], Some(timing), None).unwrap();
+        let report_b = build_report("SEQ_B", &estimated, &groundtruth, &[1], None, None).unwrap();
         write_summary_csv(&path, &[report_a, report_b]).expect("write should succeed");
 
         let contents = std::fs::read_to_string(&path).expect("read back");
