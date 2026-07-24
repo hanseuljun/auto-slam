@@ -400,6 +400,30 @@ re-measures on all 5 sequences, bounded and full, both ATE metrics.
 - Test/deliverable: a real before/after comparison (`memory/decisions`)
   confirming or ruling out the weighting-imbalance hypothesis, with
   actual numbers, on at least 2 sequences.
+- **Result**: added `VioParams::disable_imu_factors`, threaded through
+  the 3 places IMU factors actually enter the optimizer (`run_
+  optimization`, `global_bundle_adjustment_inner`, `marginalize_evicted_
+  keyframe`'s prior — deliberately not the track-loss-recovery fallback,
+  a different "no vision at all" scenario), plus a `bin/slam-run
+  --disable-imu-factors` flag to run it on real full sequences. Result:
+  **catastrophic divergence, not a cleaner reconstruction** — on both
+  tested sequences, 3-4 orders of magnitude worse on every metric
+  (`MH_01_easy`: 685 -> 2236 keyframes, 319 -> 2055 track-loss
+  recoveries, anisotropy 14.03 -> 4664 (z axis), loop-closure gap 81.66m
+  -> 72210m; `MH_04_difficult`: similarly, 374 -> 1161 keyframes, 2.10 ->
+  1737 anisotropy). This directly answers the milestone's own test:
+  scale does *not* stay stable without IMU factors, so **the weighting-
+  imbalance hypothesis is ruled out** — IMU information is load-bearing
+  for basic stability, not a magnitude tuning knob. Mechanism (not just
+  "it broke"): reprojection factors only ever touch 6 of `KeyframeState`'s
+  15 dimensions (pose); with IMU factors gone, velocity/bias (9
+  dimensions) get zero information from any factor, and `marginalize_
+  evicted_keyframe`'s Schur complement folds that near-arbitrary
+  uncertainty into the carried-forward prior at every eviction —
+  compounding over hundreds to thousands of evictions across a full
+  sequence, exactly the "marginalization's own Schur-complement
+  accumulation" alternative this milestone's own bullet named up front.
+  Full numbers and reasoning: `memory/decisions/0028`.
 
 ### M7 — Goal 3: fix it, or document it — either way, close the loop
 

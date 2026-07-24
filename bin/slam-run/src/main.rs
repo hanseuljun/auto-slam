@@ -61,6 +61,16 @@ struct Cli {
     /// sequence.
     #[arg(long)]
     frames: Option<usize>,
+
+    /// Ablates every IMU factor/prior from the windowed optimizer and
+    /// marginalization (`slam_backend::VioParams::disable_imu_factors`)
+    /// — `plan/STAGE6.md` M6's real ablation testing whether IMU-vs-
+    /// vision weighting explains the anisotropic scale distortion M5
+    /// found, not more reasoning about it. Loop closure/global BA still
+    /// run unchanged (reprojection-only, same as the rest of the
+    /// pipeline once IMU factors are gone).
+    #[arg(long)]
+    disable_imu_factors: bool,
 }
 
 fn default_sequences() -> Vec<PathBuf> {
@@ -89,7 +99,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut reports = Vec::new();
     for seq_dir in &sequences {
-        if let Some(report) = run_sequence(seq_dir, &cli.out_dir, cli.frames, &run_id, git_commit.as_deref())? {
+        if let Some(report) = run_sequence(seq_dir, &cli.out_dir, cli.frames, &run_id, git_commit.as_deref(), cli.disable_imu_factors)? {
             reports.push(report);
         }
     }
@@ -140,7 +150,7 @@ const ALIGN_PREFIX_SECONDS: f64 = 30.0;
 /// measured, not guessed, choice (`memory/decisions/0026`).
 const LOOP_CLOSURE_CAPTURE_STRIDE: usize = 2;
 
-fn run_sequence(seq_dir: &Path, out_dir: &Path, frame_cap: Option<usize>, run_id: &str, git_commit: Option<&str>) -> anyhow::Result<Option<slam_eval::TrajectoryReport>> {
+fn run_sequence(seq_dir: &Path, out_dir: &Path, frame_cap: Option<usize>, run_id: &str, git_commit: Option<&str>, disable_imu_factors: bool) -> anyhow::Result<Option<slam_eval::TrajectoryReport>> {
     let name = seq_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| seq_dir.display().to_string());
     println!("==== {name} ====");
 
@@ -190,6 +200,7 @@ fn run_sequence(seq_dir: &Path, out_dir: &Path, frame_cap: Option<usize>, run_id
     // on 4 of 5 real sequences, even in the narrowest form tried.
     let params = slam_backend::VioParams {
         solver: slam_optim::SolverConfig { max_iterations: 6, ..slam_optim::SolverConfig::default() },
+        disable_imu_factors,
         ..slam_backend::VioParams::default()
     };
     // `VioPipeline::new` takes `rig` by value; loop-closure keyframe

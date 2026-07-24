@@ -24,7 +24,7 @@ start is now honest (a new prefix-aligned metric that doesn't let later
 drift mask early accuracy) and loop closure is chained into
 `bin/slam-run`'s real pipeline on every sequence, gated on a real
 geometric check — see [`docs/RESULTS.md`](docs/RESULTS.md)'s "Loop
-closure and honest ATE" section. **Stage 6 (in progress, M0-M5 done)**
+closure and honest ATE" section. **Stage 6 (in progress, M0-M6 done)**
 is closing the remaining accuracy gap an HTML diagnostic surfaced:
 analytic IMU Jacobians landed (M1, a real but mostly negative accuracy
 effect, kept anyway), real preintegration covariance propagation was
@@ -32,9 +32,11 @@ tried as solver weighting, measured a severe regression, and reverted
 (M2), a hand-rolled sparse pose-graph solver replaced loop closure's
 dense O(n^3) correction ceiling (M3), loop-closure capture density
 doubled (M4, measured to hold the real-time bar with real gap-closure
-gains), and real diagnostic instrumentation found the scale anomaly is
+gains), real diagnostic instrumentation found the scale anomaly is
 anisotropic per-axis distortion, not simple gradual or step-change drift
-(M5) — see `memory/decisions/0023`/`0024`/`0025`/`0026`/`0027`. [`plan/STAGE1.md`](plan/STAGE1.md),
+(M5), and a real ablation ruled out the IMU-vs-vision weighting
+hypothesis (M6: removing IMU factors causes catastrophic divergence, not
+a cleaner reconstruction) — see `memory/decisions/0023`/`0024`/`0025`/`0026`/`0027`/`0028`. [`plan/STAGE1.md`](plan/STAGE1.md),
 [`plan/STAGE2.md`](plan/STAGE2.md), and
 [`plan/STAGE3.md`](plan/STAGE3.md) are all done and worth reading for
 that history.
@@ -72,7 +74,7 @@ existing whole-trajectory alignment let a bad ending mask a good
 beginning), and because every `machine_hall` sequence returns near its
 own starting point yet loop closure — real, tested code since Stage 1
 M7 — was never wired into the pipeline `bin/slam-run` actually reports
-numbers for. **Stage 6** (in progress, M0-M5 done) exists because an
+numbers for. **Stage 6** (in progress, M0-M6 done) exists because an
 HTML diagnostic built after Stage 5 found the accuracy gap against
 published stereo-inertial SLAM systems was still 90-280x worse than
 state of the art across 4 layers; M1/M2 tackled the first layer (real
@@ -82,9 +84,14 @@ the expected "transparent improvement," M3 tackled the second layer
 (the sparse solver removing loop closure's own correction ceiling), and
 M4 spent that removed ceiling (measured, not guessed, that stride 1
 itself breaks the real-time bar via a different bottleneck, so stride 2
-is the real answer), and M5's own instrumentation found the "scale
+is the real answer), M5's own instrumentation found the "scale
 anomaly" question itself was underspecified — the real signal is
-per-axis anisotropy, not a scalar drifting gradually or in one step. See [`plan/STAGE1.md`](plan/STAGE1.md),
+per-axis anisotropy, not a scalar drifting gradually or in one step —
+and M6's real ablation (IMU factors fully removed) ruled out the
+weighting-imbalance hypothesis outright: the pipeline catastrophically
+diverges without IMU factors rather than settling into a cleaner
+isotropic reconstruction, pointing at marginalization's own handling of
+unconstrained bias/velocity dimensions as the real lead for M7 instead. See [`plan/STAGE1.md`](plan/STAGE1.md),
 [`plan/STAGE2.md`](plan/STAGE2.md), [`plan/STAGE3.md`](plan/STAGE3.md),
 [`plan/STAGE4.md`](plan/STAGE4.md), and [`plan/STAGE5.md`](plan/STAGE5.md)
 for the full milestone lists and [`memory/progress/`](memory/progress/)
@@ -128,7 +135,8 @@ for a session-by-session log of what landed and when.
 | Stage 6 M3 | Sparse pose-graph solver (removes loop closure's O(n^3) ceiling) | **Done — hand-rolled block-tridiagonal + Woodbury solver, ~97ms vs. 10+ min on a 741-node graph, see `memory/decisions/0025`** |
 | Stage 6 M4 | Reduce loop-closure stride, re-verify real-time bar | **Done — stride 1 broke the bar (vocab/place-recognition cost), stride 2 holds it with dramatic gap-closure gains on most sequences, see `memory/decisions/0026`** |
 | Stage 6 M5 | Instrument and measure scale drift over a run | **Done — scale error is anisotropic, not gradual/step (Z axis worst on both tested sequences), reframing the question, see `memory/decisions/0027`** |
-| Stage 6 M6 | Test the IMU-vs-vision residual weighting hypothesis | In progress |
+| Stage 6 M6 | Test the IMU-vs-vision residual weighting hypothesis | **Done — ruled out: removing IMU factors causes 3-4 orders of magnitude catastrophic divergence, not a cleaner reconstruction, see `memory/decisions/0028`** |
+| Stage 6 M7 | Fix or document the scale anomaly | In progress |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
@@ -545,6 +553,29 @@ isotropic ATE metric can absorb real anisotropic error into its scale
 parameter, sharpening `decisions/0020`'s own tentative worry into a
 measured mechanism. `bin/slam-run` now prints both diagnostics for every
 run, permanently. Full details: `memory/decisions/0027`.
+
+**Stage 6's M6**: a real ablation, not more reasoning about the
+weighting hypothesis — added `VioParams::disable_imu_factors`, cutting
+IMU information from the 3 places it actually enters the optimizer
+(the windowed and global-BA factor lists, and the marginalization
+prior), plus a `bin/slam-run --disable-imu-factors` flag to run it on
+real full sequences with M5's own evaluation code. If IMU-vs-vision
+weighting were the cause, removing IMU entirely should reveal a cleaner
+(if less informed) isotropic reconstruction underneath. Instead: **3-4
+orders of magnitude worse on every metric, on both tested sequences**
+(`MH_01_easy`: 685 -> 2236 keyframes, 319 -> 2055 track-loss recoveries,
+z-axis anisotropy 14.03 -> 4664, loop-closure gap 81.66m -> 72210m;
+`MH_04_difficult` similarly) — catastrophic divergence, not a cleaner
+reconstruction. This rules out the weighting-imbalance hypothesis
+outright. Mechanism: reprojection factors only touch 6 of
+`KeyframeState`'s 15 dimensions (pose); without IMU factors, velocity/
+bias (9 dimensions) get zero information from any factor, and
+marginalization's Schur complement folds that near-arbitrary
+uncertainty into the carried-forward prior at every eviction —
+compounding over a full sequence's worth of evictions, exactly the
+"marginalization's own Schur-complement accumulation" alternative this
+milestone's own plan text named up front. Full details: `memory/
+decisions/0028`.
 
 ## Building
 

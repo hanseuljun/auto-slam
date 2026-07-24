@@ -66,6 +66,26 @@ pub struct VioParams {
     /// across all 5 `machine_hall` sequences.
     pub gyro_noise_density: f64,
     pub accel_noise_density: f64,
+    /// Ablates every IMU factor/prior contribution from the windowed
+    /// optimizer and marginalization (`plan/STAGE6.md` M6: a real
+    /// ablation testing whether IMU-vs-vision weighting explains the
+    /// anisotropic scale distortion `plan/STAGE6.md` M5 found, not more
+    /// reasoning about it). When `true`: `run_optimization`/`global_
+    /// bundle_adjustment_inner` build empty `imu_factors`/`bias_rw_
+    /// factors` (reprojection-only bundle adjustment), and `marginalize_
+    /// evicted_keyframe` passes `imu_edge: None` so IMU information
+    /// doesn't leak into the carried-forward prior either. Deliberately
+    /// does *not* touch the track-loss-recovery fallback (`propagate_
+    /// state`, used only when vision has nothing to PnP against at all)
+    /// — that's a "no vision available" fallback, not part of the
+    /// steady-state IMU-vs-vision weighting question this flag targets;
+    /// disabling it too would just mean total information loss on
+    /// recovery frames instead of a controlled ablation. Preintegration
+    /// itself still runs unconditionally (cheap, and several other
+    /// things — bias state initialization, the recovery fallback above —
+    /// still expect it to exist); only its use as an optimization
+    /// *factor* is cut. Defaults to `false` (normal VIO).
+    pub disable_imu_factors: bool,
 }
 
 impl Default for VioParams {
@@ -93,6 +113,7 @@ impl Default for VioParams {
             // sensor.yaml`, identical across all 5 sequences).
             gyro_noise_density: 1.6968e-04,
             accel_noise_density: 2.0000e-3,
+            disable_imu_factors: false,
         }
     }
 }
@@ -553,7 +574,7 @@ impl VioPipeline {
             state_k: evicted.state,
             state_k1: new_oldest.state,
             incoming_prior: self.prior,
-            imu_edge: new_oldest.imu_edge.clone(),
+            imu_edge: if self.params.disable_imu_factors { None } else { new_oldest.imu_edge.clone() },
             unique_landmarks,
             gravity_world: self.gravity_world,
             config: self.params.solver,
@@ -591,10 +612,12 @@ impl VioPipeline {
         // window[0]'s `imu_edge` (if any) connects to a keyframe that has
         // already slid out of the window — only edges among keyframes
         // *currently* in the window (kf_idx >= 1) are usable here.
-        for (kf_idx, kf) in self.window.iter().enumerate().skip(1) {
-            if let Some((preint, dt)) = &kf.imu_edge {
-                imu_factors.push(ImuFactorSpec { i: kf_idx - 1, j: kf_idx, preint: preint.clone(), dt: *dt });
-                bias_rw_factors.push(BiasRwFactorSpec { i: kf_idx - 1, j: kf_idx });
+        if !self.params.disable_imu_factors {
+            for (kf_idx, kf) in self.window.iter().enumerate().skip(1) {
+                if let Some((preint, dt)) = &kf.imu_edge {
+                    imu_factors.push(ImuFactorSpec { i: kf_idx - 1, j: kf_idx, preint: preint.clone(), dt: *dt });
+                    bias_rw_factors.push(BiasRwFactorSpec { i: kf_idx - 1, j: kf_idx });
+                }
             }
         }
 
@@ -690,7 +713,7 @@ impl VioPipeline {
             // bounded `Problem` (an out-of-range/underflow bug the
             // unbounded case never had to guard against, since
             // `history[0]`'s own `imu_edge` is always `None`).
-            if kf_idx > 0 {
+            if kf_idx > 0 && !self.params.disable_imu_factors {
                 if let Some((preint, dt)) = &kf.imu_edge {
                     imu_factors.push(ImuFactorSpec { i: kf_idx - 1, j: kf_idx, preint: preint.clone(), dt: *dt });
                     bias_rw_factors.push(BiasRwFactorSpec { i: kf_idx - 1, j: kf_idx });

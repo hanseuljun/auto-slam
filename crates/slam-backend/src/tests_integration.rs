@@ -364,6 +364,91 @@ mod tests {
         }
     }
 
+    /// `plan/STAGE6.md` M6's own ablation: `disable_imu_factors: true`
+    /// should still produce a real, non-crashing, non-degenerate
+    /// trajectory (reprojection-only bundle adjustment) — not just "no
+    /// panic," but landmarks/keyframes that still converge to something
+    /// plausible, confirming the ablation is a real vision-only run and
+    /// not e.g. a solver that silently stalls once IMU factors vanish
+    /// (every state dimension still gets *some* information: reprojection
+    /// constrains pose/landmarks, and LM's own damping floor handles any
+    /// residual zero-information dimensions like bias without a
+    /// singular-matrix failure).
+    #[test]
+    fn disable_imu_factors_still_produces_a_real_trajectory() {
+        let seq = load_sequence("MH_01_easy");
+        let rig = stereo_rig(&seq.calibration);
+
+        let all_gyro: Vec<Vector3<f64>> = seq.imu_samples.iter().map(|s| s.gyro).collect();
+        let start = find_stationary_window(&all_gyro, 200, 0.10).expect("MH_01 should have a stationary window");
+        let accel: Vec<Vector3<f64>> = seq.imu_samples[start..start + 200].iter().map(|s| s.accel).collect();
+        let static_init = static_initialize(&all_gyro[start..start + 200], &accel).expect("static init should succeed");
+        let initial_state = KeyframeState::new(SE3::identity(), Vector3::zeros(), static_init.gyro_bias, Vector3::zeros());
+        let gravity_world = static_init.gravity_direction_body * static_init.gravity_magnitude;
+
+        let num_frames = 80usize.min(seq.cam0_frames.len());
+        let left0 = seq.load_cam0_image(0).unwrap();
+        let right0 = seq.load_cam1_image(0).unwrap();
+
+        let params = VioParams {
+            solver: slam_optim::SolverConfig { max_iterations: 6, ..slam_optim::SolverConfig::default() },
+            disable_imu_factors: true,
+            ..VioParams::default()
+        };
+        let mut vio = VioPipeline::new(rig, initial_state, seq.cam0_frames[0].timestamp_ns, gravity_world, params);
+        vio.init_map(&left0, &right0);
+        assert!(vio.num_landmarks() > 50, "expected a real initial map, got {}", vio.num_landmarks());
+
+        let mut trajectory: Vec<(u64, Vector3<f64>)> = vec![(seq.cam0_frames[0].timestamp_ns, Vector3::zeros())];
+        let mut prev_timestamp = seq.cam0_frames[0].timestamp_ns;
+        let mut lost_at = None;
+
+        for i in 1..num_frames {
+            let left = seq.load_cam0_image(i).unwrap();
+            let right = seq.load_cam1_image(i).unwrap();
+            let timestamp = seq.cam0_frames[i].timestamp_ns;
+            let imu_since_last: Vec<_> = seq.imu_samples.iter().filter(|s| s.timestamp_ns > prev_timestamp && s.timestamp_ns <= timestamp).cloned().collect();
+            prev_timestamp = timestamp;
+
+            match vio.process_frame(&left, &right, timestamp, &imu_since_last) {
+                Some(result) if result.is_keyframe => {
+                    let position_world = result.pose_world_to_body.inverse().translation;
+                    assert!(position_world.iter().all(|v| v.is_finite()), "non-finite pose with IMU factors disabled");
+                    trajectory.push((timestamp, position_world));
+                }
+                Some(_) => {}
+                None => {
+                    lost_at = Some(i);
+                    break;
+                }
+            }
+        }
+        assert!(lost_at.is_none(), "VIO (IMU factors disabled) tracking lost at frame {:?}", lost_at);
+        assert!(trajectory.len() >= 6, "expected several keyframes, got {}", trajectory.len());
+
+        let gt_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/machine_hall/MH_01_easy/mav0/state_groundtruth_estimate0/data.csv");
+        let gt = slam_eval::GroundTruthTrajectory::load(gt_path).expect("load groundtruth");
+        let mut aligned_estimate = Vec::new();
+        let mut aligned_groundtruth = Vec::new();
+        for (t, p) in &trajectory {
+            if let Some(pose) = gt.interpolate(*t) {
+                aligned_estimate.push(*p);
+                aligned_groundtruth.push(pose.position);
+            }
+        }
+        assert!(aligned_estimate.len() >= 5, "too few keyframe timestamps had groundtruth coverage");
+
+        let stats = slam_eval::compute_ate(&aligned_estimate, &aligned_groundtruth).expect("ATE should compute");
+        println!("VIO with IMU factors disabled, ATE over {} keyframes: rmse={:.3}m", aligned_estimate.len(), stats.rmse);
+        // Same generous "plausible, not diverging" bar as the normal-VIO
+        // checkpoint above — this test's job is confirming the ablation
+        // runs and produces something real, not asserting it's more or
+        // less accurate than normal VIO (that comparison is `plan/
+        // STAGE6.md` M6's own real-data job, on the full sequence, not
+        // this short clip).
+        assert!(stats.rmse < 2.0, "VIO (IMU factors disabled) ATE RMSE unexpectedly large: {}", stats.rmse);
+    }
+
     fn vio_default_window_size() -> usize {
         VioParams::default().window_size
     }
