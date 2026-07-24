@@ -3304,6 +3304,7 @@ name = "slam-run"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "approx",
  "chrono",
  "clap",
  "nalgebra",
@@ -3313,7 +3314,9 @@ dependencies = [
  "slam-eval",
  "slam-geometry",
  "slam-imu",
+ "slam-loopclosure",
  "slam-optim",
+ "slam-vision",
 ]
 
 [[package]]

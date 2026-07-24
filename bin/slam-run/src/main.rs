@@ -21,16 +21,26 @@
 //! 600` for ~30s of data), still useful for quick tuning turnaround
 //! (`decisions/0016`-`0017`'s sweeps used exactly this).
 //!
-//! Loop closure (M7) is deliberately not chained in here: it currently
-//! operates on `VoPipeline`, not `VioPipeline`, and only `MH_05_difficult`
-//! has a real loop to close — `bin/slam-inspect` already demonstrates that
-//! path on its own.
+//! Loop closure (`plan/STAGE1.md` M7) is chained in as of `plan/STAGE5.md`
+//! M2: every `machine_hall` sequence returns near its own start position
+//! (confirmed via groundtruth, `plan/STAGE5.md`'s Finding 2), so this
+//! isn't a one-sequence special case. Detection/verification/pose-graph
+//! optimization run as a post-processing pass over the trajectory
+//! `global_bundle_adjustment` produces (mirroring global BA's own one-shot-
+//! pass shape), and the correction is only actually applied if it verifiably
+//! brings the trajectory's own start and end closer together — a real,
+//! cheap geometric gate, not just "a loop was detected" (`memory/
+//! decisions/0021`: applying a *detected* loop's correction blindly
+//! regressed `MH_01_easy` during this milestone's own baseline check).
+//! `bin/slam-inspect`'s own `VoPipeline`-only demo predates this and is
+//! independent of it.
 
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use clap::Parser;
 use nalgebra::Vector3;
+use slam_core::SE3;
 
 #[derive(Parser)]
 #[command(name = "slam-run", about = "Run stereo-inertial VIO + global BA over one or more EuRoC sequences and report ATE/RPE/real-time factor")]
@@ -112,6 +122,26 @@ const RPE_DELTAS: &[usize] = &[1, 10];
 /// drift doesn't get the chance to pull the fit.
 const ALIGN_PREFIX_SECONDS: f64 = 30.0;
 
+/// Capture a loop-closure keyframe every `LOOP_CLOSURE_CAPTURE_STRIDE`-th
+/// VIO keyframe, not every one (`plan/STAGE5.md` M2, `memory/
+/// decisions/0021`) — VIO keyframes are far denser than loop detection
+/// needs (up to 741 on `MH_01_easy`'s full run, track-loss recovery
+/// included, `plan/STAGE4.md` M2), and capturing (let alone pose-graph-
+/// optimizing) at that density measurably broke the real-time bar (590s+
+/// of loop-closure cost on one sequence alone at stride 1). A real,
+/// measured tradeoff, not an arbitrary pick: stride 4 (~185 nodes) costs
+/// ~23s and holds the real-time bar (whole-run factor 0.85 on
+/// `MH_01_easy`) but leaves real, visible RPE degradation from the
+/// smooth-interpolation correction (delta=1 rmse 0.16m -> 0.86m); stride 2
+/// (~370 nodes) roughly halves that RPE hit (-> 0.51m) but costs 88s and
+/// *breaks* the real-time bar (whole-run factor 1.21). The real-time bar
+/// is the non-negotiable one here (`plan/STAGE4.md`'s own hard-won
+/// constraint, and this stage's own Risks section's explicit warning
+/// against reopening that exact wound) — 4 is the choice, and the RPE
+/// tradeoff is a documented, open limitation (`memory/decisions/0021`),
+/// not a hidden one.
+const LOOP_CLOSURE_CAPTURE_STRIDE: usize = 4;
+
 fn run_sequence(seq_dir: &Path, out_dir: &Path, frame_cap: Option<usize>, run_id: &str, git_commit: Option<&str>) -> anyhow::Result<Option<slam_eval::TrajectoryReport>> {
     let name = seq_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| seq_dir.display().to_string());
     println!("==== {name} ====");
@@ -164,12 +194,30 @@ fn run_sequence(seq_dir: &Path, out_dir: &Path, frame_cap: Option<usize>, run_id
         solver: slam_optim::SolverConfig { max_iterations: 6, ..slam_optim::SolverConfig::default() },
         ..slam_backend::VioParams::default()
     };
+    // `VioPipeline::new` takes `rig` by value; loop-closure keyframe
+    // capture (below) needs its own copy plus the rectification `rig`
+    // alone doesn't carry.
+    let lc_rig = rig.clone();
+    let lc_rect = lc_rig.rectify();
     let mut vio = slam_backend::VioPipeline::new(rig, initial_state, seq.cam0_frames[0].timestamp_ns, gravity_world, params);
     vio.init_map(&left0, &right0);
+
+    let mut loop_closure_time = Duration::ZERO;
+    let capture_start = Instant::now();
+    let mut loop_keyframes = vec![slam_loopclosure::capture_loop_keyframe(
+        &left0,
+        &right0,
+        slam_loopclosure::KeyframeMeta { keyframe_id: 0, timestamp_ns: seq.cam0_frames[0].timestamp_ns, pose_world_to_cam0: world_to_cam0(lc_rig.t_bs_cam0, SE3::identity()) },
+        &lc_rig,
+        &lc_rect,
+        &slam_loopclosure::CaptureParams::default(),
+    )];
+    loop_closure_time += capture_start.elapsed();
 
     let mut prev_timestamp = seq.cam0_frames[0].timestamp_ns;
     let mut lost_frames = 0usize;
     let mut recovered_frames = 0usize;
+    let mut vio_keyframe_count = 0usize;
     for i in 1..num_frames {
         let left = seq.load_cam0_image(i)?;
         let right = seq.load_cam1_image(i)?;
@@ -184,8 +232,50 @@ fn run_sequence(seq_dir: &Path, out_dir: &Path, frame_cap: Option<usize>, run_id
                 // aborting the whole sequence over it.
                 lost_frames += 1;
             }
-            Some(r) if r.recovered => recovered_frames += 1,
-            Some(_) => {}
+            Some(r) => {
+                if r.recovered {
+                    recovered_frames += 1;
+                }
+                if r.is_keyframe {
+                    vio_keyframe_count += 1;
+                    // Every VIO keyframe (up to 741 on MH_01_easy's full
+                    // run, track-loss recovery included) is far denser than
+                    // loop-closure keyframe capture needs to be — capturing
+                    // at that density measurably broke the real-time bar
+                    // this milestone must not regress (`memory/
+                    // decisions/0021`: 590s of loop-closure cost alone on
+                    // one sequence, both from the O(n) capture cost itself
+                    // and the O(n^2) BoW query loop below scaling with it).
+                    // `LOOP_CLOSURE_CAPTURE_STRIDE` decouples capture
+                    // density from VioPipeline's own keyframe cadence,
+                    // landing in the same few-hundred-keyframes-total range
+                    // `bin/slam-inspect`'s own demo (raw-frame stride 20)
+                    // already proved fast enough.
+                    if vio_keyframe_count.is_multiple_of(LOOP_CLOSURE_CAPTURE_STRIDE) {
+                        // Reuses the (left, right) pair already loaded for
+                        // `vio.process_frame` above — no extra image I/O,
+                        // just the extra detection/stereo-matching/
+                        // descriptor work itself (measured in
+                        // `loop_closure_time`). `keyframe_id` is this
+                        // capture's own position within `loop_keyframes`
+                        // (not `vio`'s own keyframe index, since the stride
+                        // above means they're no longer 1:1) — matched back
+                        // up to `vio.all_keyframe_poses()`'s final poses by
+                        // *timestamp* after the main loop, not by index.
+                        let capture_start = Instant::now();
+                        let keyframe_id = loop_keyframes.len();
+                        loop_keyframes.push(slam_loopclosure::capture_loop_keyframe(
+                            &left,
+                            &right,
+                            slam_loopclosure::KeyframeMeta { keyframe_id, timestamp_ns: timestamp, pose_world_to_cam0: world_to_cam0(lc_rig.t_bs_cam0, r.pose_world_to_body) },
+                            &lc_rig,
+                            &lc_rect,
+                            &slam_loopclosure::CaptureParams::default(),
+                        ));
+                        loop_closure_time += capture_start.elapsed();
+                    }
+                }
+            }
         }
     }
     let data_seconds = (prev_timestamp - seq.cam0_frames[0].timestamp_ns) as f64 * 1e-9;
@@ -196,13 +286,32 @@ fn run_sequence(seq_dir: &Path, out_dir: &Path, frame_cap: Option<usize>, run_id
     let ba_wall_elapsed = ba_wall_start.elapsed();
     let trajectory = vio.all_keyframe_poses();
 
+    // Loop closure (`plan/STAGE5.md` M2), as a post-processing pass over
+    // the same final trajectory `global_bundle_adjustment` just produced —
+    // never mutates `vio` itself, only builds a corrected copy of the pose
+    // list used for reporting/CSV output below. `loop_keyframes` is sparser
+    // than `trajectory` (`LOOP_CLOSURE_CAPTURE_STRIDE`), so each capture's
+    // final pose is looked up by *timestamp*, not index.
+    let lc_start = Instant::now();
+    let trajectory_by_ts: std::collections::HashMap<u64, SE3> = trajectory.iter().copied().collect();
+    for kf in &mut loop_keyframes {
+        if let Some(&final_pose_world_to_body) = trajectory_by_ts.get(&kf.timestamp_ns) {
+            rebase_loop_keyframe_landmarks(kf, world_to_cam0(lc_rig.t_bs_cam0, final_pose_world_to_body));
+        }
+    }
+    let (final_poses, loop_closure_outcome) = match find_and_apply_loop_closure(&loop_keyframes, &trajectory, lc_rig.t_bs_cam0) {
+        Some((poses, outcome)) => (poses, Some(outcome)),
+        None => (trajectory.iter().map(|(_, p)| *p).collect(), None),
+    };
+    loop_closure_time += lc_start.elapsed();
+
     let mut timestamps = Vec::new();
     let mut estimated = Vec::new();
     let mut groundtruth = Vec::new();
-    for (t, p) in &trajectory {
+    for ((t, _), corrected_pose) in trajectory.iter().zip(final_poses.iter()) {
         if let Some(pose) = gt.interpolate(*t) {
             timestamps.push(*t);
-            estimated.push(p.inverse().translation);
+            estimated.push(corrected_pose.inverse().translation);
             groundtruth.push(pose.position);
         }
     }
@@ -216,7 +325,7 @@ fn run_sequence(seq_dir: &Path, out_dir: &Path, frame_cap: Option<usize>, run_id
         // call above) — using the directly-measured wall-clock here avoids
         // relying on the pipeline's internal bookkeeping matching exactly.
         global_ba_seconds: ba_wall_elapsed.as_secs_f64(),
-        loop_closure_seconds: 0.0,
+        loop_closure_seconds: loop_closure_time.as_secs_f64(),
         data_seconds,
     };
 
@@ -283,11 +392,23 @@ fn run_sequence(seq_dir: &Path, out_dir: &Path, frame_cap: Option<usize>, run_id
     for rpe in &report.rpe {
         println!("  RPE (delta={} keyframes): rmse={:.3}m mean={:.3}m max={:.3}m over {} pairs", rpe.delta, rpe.rmse, rpe.mean, rpe.max, rpe.num_pairs);
     }
+    match &loop_closure_outcome {
+        Some(o) if o.applied => println!(
+            "  loop closure: keyframe {} <-> {} ({} inliers) applied — start/end gap {:.3}m -> {:.3}m",
+            o.current_id, o.candidate_id, o.num_inliers, o.gap_before, o.gap_after
+        ),
+        Some(o) => println!(
+            "  loop closure: keyframe {} <-> {} ({} inliers) detected but NOT applied — didn't verifiably close the loop (start/end gap {:.3}m -> {:.3}m)",
+            o.current_id, o.candidate_id, o.num_inliers, o.gap_before, o.gap_after
+        ),
+        None => println!("  loop closure: no verified loop detected"),
+    }
     println!(
-        "  timing: vision={:.2}s optimization={:.2}s global_ba={:.2}s (data={:.1}s) -> VIO-loop factor={:.3} whole-run factor={:.3}",
+        "  timing: vision={:.2}s optimization={:.2}s global_ba={:.2}s loop_closure={:.2}s (data={:.1}s) -> VIO-loop factor={:.3} whole-run factor={:.3}",
         timing.vision_seconds,
         timing.optimization_seconds,
         timing.global_ba_seconds,
+        timing.loop_closure_seconds,
         timing.data_seconds,
         timing.real_time_factor(),
         timing.whole_run_factor()
@@ -297,6 +418,179 @@ fn run_sequence(seq_dir: &Path, out_dir: &Path, frame_cap: Option<usize>, run_id
     println!();
 
     Ok(Some(report))
+}
+
+/// `pose_world_to_body.compose`'d with the body<->cam0 extrinsic to get
+/// the `pose_world_to_cam0` convention `slam_loopclosure`'s whole API
+/// (designed against `VoPipeline`, which operates directly in cam0's
+/// frame) expects. `t_bs_cam0` is EuRoC's own `T_BS`: cam0 -> body, so
+/// `t_bs_cam0.inverse()` is body -> cam0; composed after
+/// `pose_world_to_body` (world -> body) gives world -> cam0.
+fn world_to_cam0(t_bs_cam0: SE3, pose_world_to_body: SE3) -> SE3 {
+    t_bs_cam0.inverse().compose(&pose_world_to_body)
+}
+
+/// Refreshes a captured `LoopKeyframe`'s `landmarks_world` (and its own
+/// `pose_world_to_cam0`) to match a pose that may have moved since capture
+/// — needed because `global_bundle_adjustment` (`plan/STAGE4.md` M1) can
+/// still adjust a keyframe's pose *after* its loop-closure keyframe was
+/// captured earlier in the same run, for any keyframe within its own
+/// `max_global_ba_keyframes` scope. Landmark positions are recovered by
+/// re-projecting through the *old* pose back into cam0's own frame (camera-
+/// frame-invariant, unaffected by which world-frame pose is current) and
+/// then through the *new* pose — a rigid re-transform, not a re-detection.
+fn rebase_loop_keyframe_landmarks(kf: &mut slam_loopclosure::LoopKeyframe, new_pose_world_to_cam0: SE3) {
+    let old_pose_world_to_cam0 = kf.pose_world_to_cam0;
+    let new_pose_cam0_to_world = new_pose_world_to_cam0.inverse();
+    for landmark in &mut kf.landmarks_world {
+        let point_cam0 = old_pose_world_to_cam0.transform(landmark);
+        *landmark = new_pose_cam0_to_world.transform(&point_cam0);
+    }
+    kf.pose_world_to_cam0 = new_pose_world_to_cam0;
+}
+
+/// What `find_and_apply_loop_closure` found and did, reported so a human
+/// reading `bin/slam-run`'s output can tell "was there a loop to close"
+/// apart from "did closing it verifiably help" — two different questions,
+/// `plan/STAGE5.md` M2's own baseline check found (a detected, verified,
+/// even high-inlier-count loop still regressed `MH_01_easy` when applied
+/// unconditionally — see `memory/decisions/0021`).
+struct LoopClosureOutcome {
+    /// `loop_keyframes`' own (sparse, `LOOP_CLOSURE_CAPTURE_STRIDE`-
+    /// downsampled) indices, not raw frame or dense-trajectory indices.
+    current_id: usize,
+    candidate_id: usize,
+    num_inliers: usize,
+    /// Distance between the trajectory's own first and last pose, in this
+    /// pipeline's own (ungrounded) world frame — not aligned to
+    /// groundtruth. The direct, human-checkable geometric claim `plan/
+    /// STAGE5.md` M3 asks for: a sequence whose *groundtruth* start and
+    /// end are close (`plan/STAGE5.md`'s Finding 2, true of every
+    /// `machine_hall` sequence) should, after a *correctly* closed loop,
+    /// also have its own *estimated* start and end close — independent of
+    /// whatever `ate`/`ate_prefix_aligned` numbers say.
+    gap_before: f64,
+    gap_after: f64,
+    /// `true` only if `gap_after < gap_before` — the correction is
+    /// discarded (not just flagged) when it isn't, so `bin/slam-run`
+    /// never reports a "loop-closed" trajectory whose own start and end
+    /// are verifiably farther apart than before the "fix."
+    applied: bool,
+}
+
+/// Detects the single best loop-closure candidate across `loop_keyframes`
+/// (preferring the largest keyframe-id gap — the most direct proxy for
+/// "connects this sequence's own start back to its own end," `plan/
+/// STAGE5.md` goal 2 — over the previous naive "most descriptor-match
+/// inliers, wherever it happens to be" choice `bin/slam-inspect`'s older
+/// demo used), runs pose-graph optimization with it, and returns the
+/// corrected `pose_world_to_body` trajectory *only if* it verifiably
+/// brings the trajectory's own start and end closer together. Returns
+/// `None` if no loop clears geometric verification at all (nothing to
+/// report); otherwise `Some((poses, outcome))` where `poses` is the
+/// corrected trajectory when `outcome.applied`, or an unchanged copy of
+/// `trajectory`'s own poses otherwise.
+///
+/// The pose graph itself is built over `loop_keyframes` (the sparse,
+/// `LOOP_CLOSURE_CAPTURE_STRIDE`-downsampled set), not every dense
+/// `trajectory` keyframe — `optimize_pose_graph`'s own dense O(n^3) LU
+/// solve (`crates/slam-loopclosure/src/pose_graph.rs`, one 6-DoF-per-node
+/// block per pose, no sparsity exploited) makes that the exact scaling
+/// mistake `plan/STAGE4.md` M1 already fixed for `global_bundle_
+/// adjustment` — confirmed the hard way this milestone (`memory/
+/// decisions/0021`): running it over all 741 of `MH_01_easy`'s dense
+/// keyframes didn't finish in 10+ minutes. The sparse graph's correction
+/// is then propagated onto the dense trajectory by nearest-timestamp
+/// rigid delta — simple, not perfectly smooth at segment boundaries, but
+/// `LOOP_CLOSURE_CAPTURE_STRIDE`'s own density keeps "nearest" close in
+/// both time and space.
+fn find_and_apply_loop_closure(loop_keyframes: &[slam_loopclosure::LoopKeyframe], trajectory: &[(u64, SE3)], t_bs_cam0: SE3) -> Option<(Vec<SE3>, LoopClosureOutcome)> {
+    let all_descriptors: Vec<_> = loop_keyframes.iter().flat_map(|k| k.descriptors.iter().copied()).collect();
+    if all_descriptors.len() < 500 {
+        return None;
+    }
+    let vocab = slam_loopclosure::Vocabulary::train(&all_descriptors, 300, 6, 17);
+
+    let mut db = slam_loopclosure::KeyframeDatabase::new();
+    for kf in loop_keyframes {
+        db.insert(kf.keyframe_id, vocab.compute_bow(&kf.descriptors));
+    }
+
+    let min_id_gap = 30;
+    let mut best: Option<(usize, usize, slam_loopclosure::VerifiedLoop)> = None;
+    for kf in loop_keyframes {
+        let query_bow = vocab.compute_bow(&kf.descriptors);
+        let Some((candidate_id, _)) = db.query(kf.keyframe_id, &query_bow, min_id_gap, 0.3) else {
+            continue;
+        };
+        let candidate = &loop_keyframes[candidate_id];
+        let Some(verified) = slam_loopclosure::verify_loop_candidate(&kf.normalized, &kf.descriptors, &candidate.descriptors, &candidate.landmarks_world, &slam_loopclosure::GeometricVerificationParams::default()) else {
+            continue;
+        };
+        let gap = kf.keyframe_id.abs_diff(candidate_id);
+        let is_better = match &best {
+            None => true,
+            Some((prev_current, prev_candidate, _)) => gap > prev_current.abs_diff(*prev_candidate),
+        };
+        if is_better {
+            best = Some((kf.keyframe_id, candidate_id, verified));
+        }
+    }
+    let (current_id, candidate_id, verified) = best?;
+
+    let sparse_poses: Vec<SE3> = loop_keyframes.iter().map(|k| k.pose_world_to_cam0).collect();
+    let mut edges = Vec::with_capacity(sparse_poses.len());
+    for i in 0..sparse_poses.len() - 1 {
+        edges.push(slam_loopclosure::PoseGraphEdge { i, j: i + 1, relative_pose: sparse_poses[i + 1].compose(&sparse_poses[i].inverse()), weight: 1.0 });
+    }
+    let loop_relative_pose = verified.relative_pose.compose(&sparse_poses[candidate_id].inverse());
+    edges.push(slam_loopclosure::PoseGraphEdge { i: candidate_id, j: current_id, relative_pose: loop_relative_pose, weight: 5000.0 });
+
+    let mut sparse_corrected = sparse_poses.clone();
+    slam_loopclosure::optimize_pose_graph(&mut sparse_corrected, &edges, 0, 50);
+
+    // Per-sparse-node correction delta: `delta.compose(&original) ==
+    // corrected`, so `delta = corrected.compose(&original.inverse())`.
+    // Propagated onto the dense trajectory by *smoothly interpolating*
+    // between the two bracketing sparse deltas (SE3 log-space lerp, same
+    // primitive `optimize_pose_graph`'s own `edge_residual` uses) — a
+    // discrete nearest-sparse-node assignment was tried first and measurably
+    // injected a real discontinuity at every stride boundary (RPE delta=1
+    // rmse jumped ~7x, 0.162m -> 1.104m, on `MH_01_easy` — a correction
+    // shouldn't visibly degrade local frame-to-frame consistency to fix
+    // global drift; `memory/decisions/0021`).
+    let sparse_deltas: Vec<SE3> = sparse_poses.iter().zip(sparse_corrected.iter()).map(|(orig, corr)| corr.compose(&orig.inverse())).collect();
+    let sparse_timestamps: Vec<u64> = loop_keyframes.iter().map(|k| k.timestamp_ns).collect();
+    let interpolated_delta = |ts: u64| -> SE3 {
+        let pos = sparse_timestamps.partition_point(|&t| t < ts);
+        if pos == 0 {
+            return sparse_deltas[0];
+        }
+        if pos == sparse_timestamps.len() {
+            return sparse_deltas[sparse_deltas.len() - 1];
+        }
+        if sparse_timestamps[pos] == ts {
+            return sparse_deltas[pos];
+        }
+        let (lo, hi) = (pos - 1, pos);
+        let span = (sparse_timestamps[hi] - sparse_timestamps[lo]) as f64;
+        let alpha = if span > 0.0 { (ts - sparse_timestamps[lo]) as f64 / span } else { 0.0 };
+        let relative = sparse_deltas[lo].inverse().compose(&sparse_deltas[hi]);
+        sparse_deltas[lo].compose(&SE3::exp(relative.log() * alpha))
+    };
+
+    let dense_poses: Vec<SE3> = trajectory.iter().map(|(_, p)| world_to_cam0(t_bs_cam0, *p)).collect();
+    let dense_corrected: Vec<SE3> = trajectory.iter().zip(dense_poses.iter()).map(|((t, _), p)| interpolated_delta(*t).compose(p)).collect();
+
+    let start_end_gap = |ps: &[SE3]| -> f64 { (ps[0].inverse().translation - ps[ps.len() - 1].inverse().translation).norm() };
+    let gap_before = start_end_gap(&dense_poses);
+    let gap_after = start_end_gap(&dense_corrected);
+    let applied = gap_after < gap_before;
+
+    let final_poses_cam0 = if applied { &dense_corrected } else { &dense_poses };
+    let final_poses_body: Vec<SE3> = final_poses_cam0.iter().map(|p| t_bs_cam0.compose(p)).collect();
+
+    Some((final_poses_body, LoopClosureOutcome { current_id, candidate_id, num_inliers: verified.num_inliers, gap_before, gap_after, applied }))
 }
 
 fn print_summary_table(reports: &[slam_eval::TrajectoryReport]) {
@@ -313,5 +607,83 @@ fn print_summary_table(reports: &[slam_eval::TrajectoryReport]) {
             vio_rtf.map(|v| format!("{v:.3}")).unwrap_or_else(|| "n/a".to_string()),
             whole_rtf.map(|v| format!("{v:.3}")).unwrap_or_else(|| "n/a".to_string())
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_relative_eq;
+    use slam_core::SO3;
+
+    fn dummy_descriptor() -> slam_vision::Descriptor {
+        slam_vision::Descriptor([0, 0, 0, 0])
+    }
+
+    #[test]
+    fn world_to_cam0_matches_manual_composition() {
+        let t_bs_cam0 = SE3::new(SO3::exp(Vector3::new(0.1, -0.05, 0.02)), Vector3::new(0.01, -0.03, 0.02));
+        let pose_world_to_body = SE3::new(SO3::exp(Vector3::new(0.0, 0.3, 0.0)), Vector3::new(1.0, 2.0, 3.0));
+
+        let result = world_to_cam0(t_bs_cam0, pose_world_to_body);
+
+        // A point known in cam0's own frame should round-trip through
+        // world coordinates and back to the same point.
+        let p_cam0 = Vector3::new(0.5, -0.2, 4.0);
+        let p_body = t_bs_cam0.transform(&p_cam0);
+        let p_world = pose_world_to_body.inverse().transform(&p_body);
+        assert_relative_eq!(result.transform(&p_world), p_cam0, epsilon = 1e-9);
+    }
+
+    #[test]
+    fn world_to_cam0_of_identity_body_pose_is_just_the_inverse_extrinsic() {
+        let t_bs_cam0 = SE3::new(SO3::exp(Vector3::new(0.0, 0.0, 0.2)), Vector3::new(0.05, 0.0, 0.0));
+        let result = world_to_cam0(t_bs_cam0, SE3::identity());
+        assert_relative_eq!(result.matrix(), t_bs_cam0.inverse().matrix(), epsilon = 1e-9);
+    }
+
+    fn make_loop_keyframe(pose_world_to_cam0: SE3, landmarks_world: Vec<Vector3<f64>>) -> slam_loopclosure::LoopKeyframe {
+        let n = landmarks_world.len();
+        slam_loopclosure::LoopKeyframe {
+            keyframe_id: 0,
+            timestamp_ns: 0,
+            pose_world_to_cam0,
+            landmarks_world,
+            normalized: vec![nalgebra::Vector2::zeros(); n],
+            descriptors: vec![dummy_descriptor(); n],
+        }
+    }
+
+    #[test]
+    fn rebase_to_the_same_pose_is_a_no_op() {
+        let pose = SE3::new(SO3::exp(Vector3::new(0.1, 0.0, 0.0)), Vector3::new(1.0, 0.0, 0.0));
+        let landmarks = vec![Vector3::new(1.0, 2.0, 5.0), Vector3::new(-1.0, 0.5, 3.0)];
+        let mut kf = make_loop_keyframe(pose, landmarks.clone());
+
+        rebase_loop_keyframe_landmarks(&mut kf, pose);
+
+        for (a, b) in kf.landmarks_world.iter().zip(landmarks.iter()) {
+            assert_relative_eq!(a, b, epsilon = 1e-9);
+        }
+    }
+
+    #[test]
+    fn rebase_then_rebase_back_recovers_original_landmarks() {
+        let old_pose = SE3::new(SO3::exp(Vector3::new(0.1, -0.2, 0.05)), Vector3::new(1.0, 2.0, 0.0));
+        let new_pose = SE3::new(SO3::exp(Vector3::new(-0.3, 0.1, 0.4)), Vector3::new(-5.0, 1.0, 3.0));
+        let landmarks = vec![Vector3::new(1.0, 2.0, 5.0), Vector3::new(-1.0, 0.5, 3.0), Vector3::new(0.2, -0.4, 6.0)];
+        let mut kf = make_loop_keyframe(old_pose, landmarks.clone());
+
+        rebase_loop_keyframe_landmarks(&mut kf, new_pose);
+        assert_relative_eq!(kf.pose_world_to_cam0.matrix(), new_pose.matrix(), epsilon = 1e-9);
+        // Landmarks must have actually moved (not a no-op) — otherwise
+        // the next assertion (round-tripping back to the originals)
+        // would pass trivially even if rebasing did nothing.
+        assert!((kf.landmarks_world[0] - landmarks[0]).norm() > 1e-6);
+
+        rebase_loop_keyframe_landmarks(&mut kf, old_pose);
+        for (a, b) in kf.landmarks_world.iter().zip(landmarks.iter()) {
+            assert_relative_eq!(a, b, epsilon = 1e-9);
+        }
     }
 }

@@ -244,7 +244,7 @@ declaring done, no milestone closes on an assumed number.
   30s prefix window, so `ate_prefix_aligned` there is numerically
   identical to `ate`, confirmed on `MH_01_easy`'s own bounded run).
 
-### M2 — Wire real loop closure into `bin/slam-run`'s actual pipeline
+### M2 — Wire real loop closure into `bin/slam-run`'s actual pipeline — Done
 
 - Baseline first: run the existing `slam_loopclosure` detection +
   geometric verification (currently only exercised for `MH_05_difficult`
@@ -276,6 +276,30 @@ declaring done, no milestone closes on an assumed number.
   detects and applies a verified loop correction on every sequence where
   M2's own baseline check confirms one's detectable, with real
   before/after timing.
+- **Result**: baseline check confirmed detection works on all 5, but
+  also found applying a detected/verified correction *unconditionally*
+  can regress accuracy (`MH_01_easy`'s VO-only baseline: 3.370m ->
+  3.907m) — fixed with a geometric gate (only apply if the trajectory's
+  own start/end gap verifiably shrinks) rather than trusting descriptor-
+  match confidence alone. First full integration attempt (pose-graph
+  optimization over every dense VIO keyframe, up to 741) reintroduced
+  `plan/STAGE4.md` M1's own dense-O(n^3) scaling bug in a new call site
+  — didn't finish in 10+ minutes. Fixed by running the pose graph over a
+  sparse, stride-4-downsampled keyframe set and propagating the
+  correction onto the dense trajectory via smooth SE3 interpolation.
+  That propagation has a real, measured, open cost — RPE delta=1 rmse
+  degrades (e.g. `MH_01_easy` 0.162m -> 0.863m); a denser stride roughly
+  halves this but breaks the real-time bar (whole-run factor 1.205),
+  so the real-time bar won (non-negotiable per this stage's own Risks
+  section). Full investigation and numbers: `memory/decisions/0021`.
+  Verified on all 5 sequences, full un-truncated runs: a loop is
+  detected, verified, and the gate accepts the correction on **every**
+  sequence — start/end gap shrinks 2x-4.8x on each (MH_01 299m->145m,
+  MH_02 58.7m->12.2m, MH_03 71.1m->32.5m, MH_04 32.5m->14.5m, MH_05
+  145.8m->81.4m) — and the real-time bar holds throughout (whole-run
+  factor 0.56-0.85, all under 1.0). `TimingBreakdown::loop_closure_
+  seconds` now reports real, measured cost (7.8s-23.2s depending on
+  sequence length) instead of the previous hardcoded 0.0.
 
 ### M3 — Verify the loop is actually closed, not just that a number moved
 

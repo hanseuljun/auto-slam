@@ -15,7 +15,12 @@ slam-geometry.workspace = true
 slam-imu.workspace = true
 slam-optim.workspace = true
 slam-backend.workspace = true
+slam-loopclosure.workspace = true
 nalgebra.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 chrono.workspace = true
+
+[dev-dependencies]
+slam-vision.workspace = true
+approx.workspace = true
