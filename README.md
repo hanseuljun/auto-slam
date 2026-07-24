@@ -24,8 +24,8 @@ start is now honest (a new prefix-aligned metric that doesn't let later
 drift mask early accuracy) and loop closure is chained into
 `bin/slam-run`'s real pipeline on every sequence, gated on a real
 geometric check — see [`docs/RESULTS.md`](docs/RESULTS.md)'s "Loop
-closure and honest ATE" section. **Stage 6 (in progress, M0-M6 done)**
-is closing the remaining accuracy gap an HTML diagnostic surfaced:
+closure and honest ATE" section. **Stage 6 is done**: closed the remaining accuracy gap an HTML
+diagnostic surfaced as far as real, honest investigation could take it —
 analytic IMU Jacobians landed (M1, a real but mostly negative accuracy
 effect, kept anyway), real preintegration covariance propagation was
 tried as solver weighting, measured a severe regression, and reverted
@@ -34,9 +34,11 @@ dense O(n^3) correction ceiling (M3), loop-closure capture density
 doubled (M4, measured to hold the real-time bar with real gap-closure
 gains), real diagnostic instrumentation found the scale anomaly is
 anisotropic per-axis distortion, not simple gradual or step-change drift
-(M5), and a real ablation ruled out the IMU-vs-vision weighting
-hypothesis (M6: removing IMU factors causes catastrophic divergence, not
-a cleaner reconstruction) — see `memory/decisions/0023`/`0024`/`0025`/`0026`/`0027`/`0028`. [`plan/STAGE1.md`](plan/STAGE1.md),
+(M5), and two real ablations (M6, M7) ruled out both candidate causes
+(IMU-vs-vision weighting, marginalization's own accumulation mechanism)
+by direct measurement, leaving the anisotropy's root cause honestly
+documented as open rather than forced into a fix that isn't there — see
+`memory/decisions/0023`-`0029`. [`plan/STAGE1.md`](plan/STAGE1.md),
 [`plan/STAGE2.md`](plan/STAGE2.md), and
 [`plan/STAGE3.md`](plan/STAGE3.md) are all done and worth reading for
 that history.
@@ -74,7 +76,7 @@ existing whole-trajectory alignment let a bad ending mask a good
 beginning), and because every `machine_hall` sequence returns near its
 own starting point yet loop closure — real, tested code since Stage 1
 M7 — was never wired into the pipeline `bin/slam-run` actually reports
-numbers for. **Stage 6** (in progress, M0-M6 done) exists because an
+numbers for. **Stage 6** (all done, M0-M7) exists because an
 HTML diagnostic built after Stage 5 found the accuracy gap against
 published stereo-inertial SLAM systems was still 90-280x worse than
 state of the art across 4 layers; M1/M2 tackled the first layer (real
@@ -84,14 +86,17 @@ the expected "transparent improvement," M3 tackled the second layer
 (the sparse solver removing loop closure's own correction ceiling), and
 M4 spent that removed ceiling (measured, not guessed, that stride 1
 itself breaks the real-time bar via a different bottleneck, so stride 2
-is the real answer), M5's own instrumentation found the "scale
-anomaly" question itself was underspecified — the real signal is
-per-axis anisotropy, not a scalar drifting gradually or in one step —
-and M6's real ablation (IMU factors fully removed) ruled out the
-weighting-imbalance hypothesis outright: the pipeline catastrophically
-diverges without IMU factors rather than settling into a cleaner
-isotropic reconstruction, pointing at marginalization's own handling of
-unconstrained bias/velocity dimensions as the real lead for M7 instead. See [`plan/STAGE1.md`](plan/STAGE1.md),
+is the real answer). The third layer (M5-M7) turned out to be the most
+open-ended, matching this stage's own upfront expectation: M5's
+instrumentation found the "scale anomaly" question itself was
+underspecified — the real signal is per-axis anisotropy, not a scalar
+drifting gradually or in one step — and M6/M7's real ablations (IMU
+factors removed, then marginalization disabled) ruled out both concrete
+candidate mechanisms by direct measurement (neither IMU-vs-vision
+weighting nor marginalization's own accumulation explains it — removing
+either makes things *worse*, not better), leaving the anisotropy's root
+cause honestly documented as open rather than forced into a fix that
+isn't there. See [`plan/STAGE1.md`](plan/STAGE1.md),
 [`plan/STAGE2.md`](plan/STAGE2.md), [`plan/STAGE3.md`](plan/STAGE3.md),
 [`plan/STAGE4.md`](plan/STAGE4.md), and [`plan/STAGE5.md`](plan/STAGE5.md)
 for the full milestone lists and [`memory/progress/`](memory/progress/)
@@ -136,7 +141,7 @@ for a session-by-session log of what landed and when.
 | Stage 6 M4 | Reduce loop-closure stride, re-verify real-time bar | **Done — stride 1 broke the bar (vocab/place-recognition cost), stride 2 holds it with dramatic gap-closure gains on most sequences, see `memory/decisions/0026`** |
 | Stage 6 M5 | Instrument and measure scale drift over a run | **Done — scale error is anisotropic, not gradual/step (Z axis worst on both tested sequences), reframing the question, see `memory/decisions/0027`** |
 | Stage 6 M6 | Test the IMU-vs-vision residual weighting hypothesis | **Done — ruled out: removing IMU factors causes 3-4 orders of magnitude catastrophic divergence, not a cleaner reconstruction, see `memory/decisions/0028`** |
-| Stage 6 M7 | Fix or document the scale anomaly | In progress |
+| Stage 6 M7 | Fix or document the scale anomaly | **Done — disabling marginalization made anisotropy worse too (opposite of M6's hypothesis); both candidate mechanisms ruled out, root cause documented as open, see `memory/decisions/0029`** |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
@@ -576,6 +581,26 @@ compounding over a full sequence's worth of evictions, exactly the
 "marginalization's own Schur-complement accumulation" alternative this
 milestone's own plan text named up front. Full details: `memory/
 decisions/0028`.
+
+**Stage 6's M7** (closing Stage 6): tested M6's own hypothesis directly
+instead of stopping at it — added `VioParams::disable_marginalization`
+(naive drop, `decisions/0007`'s original alternative) and a `bin/slam-run
+--disable-marginalization` flag. **The opposite of the hypothesis**:
+disabling marginalization made anisotropy *worse* on both sequences
+(`MH_01_easy`: 14.03 -> 362 z-axis; `MH_04_difficult`: 2.10 -> 46.8),
+sitting between normal VIO and full IMU removal on every metric —
+marginalization is doing real, measurably stabilizing work relative to
+naive drop, not accumulating the distortion. Combined with M6, both
+concrete candidate mechanisms this stage's investigation produced are
+now ruled out by direct measurement, not just reasoned past. Per this
+milestone's own explicit permission for exactly this outcome, the
+anisotropic scale distortion's root cause **remains open** — documented
+honestly (not IMU/vision weighting, not marginalization's own
+mechanism, present even in the best-behaved configuration tested)
+rather than forced into a fix that isn't there. Candidate directions for
+a future stage: stereo-triangulation depth-direction bias, camera-IMU
+extrinsics calibration error, the static/dynamic initializer's own
+gravity-direction handling. Full details: `memory/decisions/0029`.
 
 ## Building
 

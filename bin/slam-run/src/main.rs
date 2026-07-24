@@ -71,6 +71,16 @@ struct Cli {
     /// pipeline once IMU factors are gone).
     #[arg(long)]
     disable_imu_factors: bool,
+
+    /// Discards an evicted keyframe's information instead of folding it
+    /// into a marginalization prior (`slam_backend::VioParams::disable_
+    /// marginalization`) — `plan/STAGE6.md` M7's direct test of whether
+    /// marginalization's own Schur-complement accumulation (the
+    /// mechanism M6's IMU ablation pointed to) is the source of M5's
+    /// anisotropic distortion, independent of the weighting question M6
+    /// already ruled out.
+    #[arg(long)]
+    disable_marginalization: bool,
 }
 
 fn default_sequences() -> Vec<PathBuf> {
@@ -99,7 +109,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut reports = Vec::new();
     for seq_dir in &sequences {
-        if let Some(report) = run_sequence(seq_dir, &cli.out_dir, cli.frames, &run_id, git_commit.as_deref(), cli.disable_imu_factors)? {
+        if let Some(report) = run_sequence(seq_dir, &cli.out_dir, cli.frames, &run_id, git_commit.as_deref(), cli.disable_imu_factors, cli.disable_marginalization)? {
             reports.push(report);
         }
     }
@@ -150,7 +160,7 @@ const ALIGN_PREFIX_SECONDS: f64 = 30.0;
 /// measured, not guessed, choice (`memory/decisions/0026`).
 const LOOP_CLOSURE_CAPTURE_STRIDE: usize = 2;
 
-fn run_sequence(seq_dir: &Path, out_dir: &Path, frame_cap: Option<usize>, run_id: &str, git_commit: Option<&str>, disable_imu_factors: bool) -> anyhow::Result<Option<slam_eval::TrajectoryReport>> {
+fn run_sequence(seq_dir: &Path, out_dir: &Path, frame_cap: Option<usize>, run_id: &str, git_commit: Option<&str>, disable_imu_factors: bool, disable_marginalization: bool) -> anyhow::Result<Option<slam_eval::TrajectoryReport>> {
     let name = seq_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| seq_dir.display().to_string());
     println!("==== {name} ====");
 
@@ -201,6 +211,7 @@ fn run_sequence(seq_dir: &Path, out_dir: &Path, frame_cap: Option<usize>, run_id
     let params = slam_backend::VioParams {
         solver: slam_optim::SolverConfig { max_iterations: 6, ..slam_optim::SolverConfig::default() },
         disable_imu_factors,
+        disable_marginalization,
         ..slam_backend::VioParams::default()
     };
     // `VioPipeline::new` takes `rig` by value; loop-closure keyframe

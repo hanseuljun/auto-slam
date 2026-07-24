@@ -438,6 +438,30 @@ re-measures on all 5 sequences, bounded and full, both ATE metrics.
   move on"). An honest "still open, here's what we now know that we
   didn't before" is a legitimate outcome for this milestone, not a
   failure to write around.
+- **Result**: tested M6's own hypothesis directly — added `VioParams::
+  disable_marginalization` (naive drop, `decisions/0007`'s original
+  alternative) and a `bin/slam-run --disable-marginalization` flag, ran
+  it on the same 2 sequences. **The opposite of the hypothesis**:
+  disabling marginalization made anisotropy *worse*, not better, on both
+  sequences (`MH_01_easy`: 14.03 -> 362 (z axis); `MH_04_difficult`: 2.10
+  -> 46.8), sitting between normal VIO and full IMU removal on every
+  metric — marginalization is doing real, measurably stabilizing work
+  (fewer track-loss recoveries, smaller anisotropy) relative to naive
+  drop, not accumulating the distortion. Combined with M6's own result,
+  **both concrete candidate mechanisms this stage's investigation
+  produced are now ruled out by direct measurement**, not just reasoned
+  past. Per this milestone's own explicit permission for this outcome:
+  the anisotropic scale distortion's root cause **remains open** —
+  documented honestly, not forced into a fix that isn't there. What's
+  now ruled in/out, concretely: not IMU/vision weight imbalance, not
+  marginalization's own accumulation mechanism; the anisotropy is present
+  even in the best-behaved (normal) configuration tested, a property of
+  the baseline reconstruction rather than an artifact of either
+  ablatable mechanism. Candidate directions for a future stage (not
+  attempted here): stereo-triangulation depth-direction bias,
+  camera-IMU extrinsics calibration error, or the static/dynamic
+  initializer's own gravity-direction handling. Full numbers and
+  reasoning: `memory/decisions/0029`.
 
 ## Out of scope for Stage 6
 

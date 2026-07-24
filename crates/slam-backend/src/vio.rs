@@ -86,6 +86,19 @@ pub struct VioParams {
     /// still expect it to exist); only its use as an optimization
     /// *factor* is cut. Defaults to `false` (normal VIO).
     pub disable_imu_factors: bool,
+    /// `plan/STAGE6.md` M7: a direct, cheap test of the mechanism M6's
+    /// ablation pointed to (marginalization's own Schur-complement
+    /// accumulation of near-unconstrained bias/velocity uncertainty).
+    /// When `true`, an evicted keyframe's information is simply
+    /// discarded instead of being folded into `self.prior` via
+    /// `marginalize_keyframe` — the "naive fixed-lag" scheme `decisions/
+    /// 0007` originally compared marginalization against and chose
+    /// against on *accuracy* grounds, revisited here specifically to
+    /// check whether marginalization is *itself* the source of the
+    /// anisotropic distortion `plan/STAGE6.md` M5 found, independent of
+    /// the IMU-vs-vision weighting question M6 already ruled out.
+    /// Defaults to `false` (normal marginalization).
+    pub disable_marginalization: bool,
 }
 
 impl Default for VioParams {
@@ -114,6 +127,7 @@ impl Default for VioParams {
             gyro_noise_density: 1.6968e-04,
             accel_noise_density: 2.0000e-3,
             disable_imu_factors: false,
+            disable_marginalization: false,
         }
     }
 }
@@ -438,7 +452,9 @@ impl VioPipeline {
 
         if self.window.len() > self.params.window_size {
             if let Some(evicted) = self.window.pop_front() {
-                self.marginalize_evicted_keyframe(&evicted);
+                if !self.params.disable_marginalization {
+                    self.marginalize_evicted_keyframe(&evicted);
+                }
                 self.history.push(evicted);
             }
         }

@@ -8,16 +8,21 @@ one) working in this repository.
 A stereo-inertial SLAM program and reconstruction library, written in Rust,
 with the SLAM/estimation algorithms implemented from scratch (infra crates
 like `nalgebra`/`image`/`serde` are fine; no OpenCV/g2o/Ceres/existing SLAM
-crates). Current stage plan: `plan/STAGE6.md` (closing the accuracy gap —
-real analytic IMU Jacobians + preintegration covariance propagation, a
-sparse pose-graph solver to remove loop closure's own correction
-ceiling, and root-causing the still-unexplained scale-consistency
-anomaly `plan/STAGE5.md` M0 found but didn't resolve). `plan/STAGE5.md`
-(honest drift measurement + real loop closure), `plan/STAGE4.md`
-(full-sequence real-time VIO), `plan/STAGE3.md` (trajectory
-visualization), `plan/STAGE2.md` (real-time VIO on a bounded clip +
-finishing Stage 1's M9/M10), and `plan/STAGE1.md` (the original
-11-milestone SLAM plan) are all done and worth reading for that history.
+crates). No stage plan is currently in progress — `plan/STAGE6.md`
+(closing the accuracy gap: real analytic IMU Jacobians + preintegration
+covariance propagation, a sparse pose-graph solver removing loop
+closure's own correction ceiling, and a real investigation into the
+scale-consistency anomaly `plan/STAGE5.md` M0 found) just finished, all
+7 milestones landed — read it for that history, including its own
+honestly-documented open question (the anisotropic scale distortion's
+root cause: `memory/decisions/0027`-`0029`). `plan/STAGE5.md` (honest
+drift measurement + real loop closure), `plan/STAGE4.md` (full-sequence
+real-time VIO), `plan/STAGE3.md` (trajectory visualization), `plan/
+STAGE2.md` (real-time VIO on a bounded clip + finishing Stage 1's
+M9/M10), and `plan/STAGE1.md` (the original 11-milestone SLAM plan) are
+also all done and worth reading for that history. When picking up new
+work, write a new `plan/STAGE7.md` (or ask what to prioritize) rather
+than assuming which of Stage 6's own open threads to pull on next.
 `plan/STAGE3.md` has its own dependency-policy addendum (a hand-written
 rendering library is "the algorithm" there; `wgpu`/`winit`/`egui` are
 infra, same spirit as `nalgebra`/`image` above). Read the current stage

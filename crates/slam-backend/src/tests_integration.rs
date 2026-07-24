@@ -449,6 +449,56 @@ mod tests {
         assert!(stats.rmse < 2.0, "VIO (IMU factors disabled) ATE RMSE unexpectedly large: {}", stats.rmse);
     }
 
+    /// `plan/STAGE6.md` M7's own ablation: `disable_marginalization: true`
+    /// (naive drop, `decisions/0007`'s original alternative) should still
+    /// run and produce a real trajectory — long enough that keyframes
+    /// actually get evicted, so this exercises the code path this flag
+    /// changes (a run shorter than `window_size` would never evict
+    /// anything, proving nothing about the flag).
+    #[test]
+    fn disable_marginalization_still_produces_a_real_trajectory() {
+        let seq = load_sequence("MH_01_easy");
+        let rig = stereo_rig(&seq.calibration);
+
+        let all_gyro: Vec<Vector3<f64>> = seq.imu_samples.iter().map(|s| s.gyro).collect();
+        let start = find_stationary_window(&all_gyro, 200, 0.10).expect("MH_01 should have a stationary window");
+        let accel: Vec<Vector3<f64>> = seq.imu_samples[start..start + 200].iter().map(|s| s.accel).collect();
+        let static_init = static_initialize(&all_gyro[start..start + 200], &accel).expect("static init should succeed");
+        let initial_state = KeyframeState::new(SE3::identity(), Vector3::zeros(), static_init.gyro_bias, Vector3::zeros());
+        let gravity_world = static_init.gravity_direction_body * static_init.gravity_magnitude;
+
+        let num_frames = 150usize.min(seq.cam0_frames.len());
+        let left0 = seq.load_cam0_image(0).unwrap();
+        let right0 = seq.load_cam1_image(0).unwrap();
+
+        let params = VioParams {
+            solver: slam_optim::SolverConfig { max_iterations: 6, ..slam_optim::SolverConfig::default() },
+            disable_marginalization: true,
+            ..VioParams::default()
+        };
+        let mut vio = VioPipeline::new(rig, initial_state, seq.cam0_frames[0].timestamp_ns, gravity_world, params);
+        vio.init_map(&left0, &right0);
+
+        let mut prev_timestamp = seq.cam0_frames[0].timestamp_ns;
+        let mut lost_at = None;
+        for i in 1..num_frames {
+            let left = seq.load_cam0_image(i).unwrap();
+            let right = seq.load_cam1_image(i).unwrap();
+            let timestamp = seq.cam0_frames[i].timestamp_ns;
+            let imu_since_last: Vec<_> = seq.imu_samples.iter().filter(|s| s.timestamp_ns > prev_timestamp && s.timestamp_ns <= timestamp).cloned().collect();
+            prev_timestamp = timestamp;
+            if vio.process_frame(&left, &right, timestamp, &imu_since_last).is_none() {
+                lost_at = Some(i);
+                break;
+            }
+        }
+        assert!(lost_at.is_none(), "VIO (marginalization disabled) tracking lost at frame {:?}", lost_at);
+
+        let before = vio.all_keyframe_poses();
+        assert!(before.len() > vio_default_window_size(), "need keyframes evicted for this test to exercise the flag, got {}", before.len());
+        assert!(before.iter().all(|(_, p)| p.matrix().iter().all(|v| v.is_finite())), "non-finite pose with marginalization disabled");
+    }
+
     fn vio_default_window_size() -> usize {
         VioParams::default().window_size
     }
