@@ -57,7 +57,10 @@ struct RawImuYaml {
 /// Camera calibration parsed from a `cam{0,1}/sensor.yaml` file.
 #[derive(Debug, Clone)]
 pub struct CameraCalibration {
-    /// Extrinsics transforming points from the body frame to the sensor frame.
+    /// Extrinsics transforming points from the sensor frame to the body
+    /// frame (EuRoC's own `T_BS` convention: `X_body = T_BS * X_sensor`
+    /// — see `slam_geometry::rectify`'s own doc comment for how this is
+    /// actually used).
     pub t_bs: Matrix4<f64>,
     pub rate_hz: f64,
     pub resolution: [u32; 2],
@@ -85,8 +88,9 @@ impl CameraCalibration {
 /// IMU calibration parsed from `imu0/sensor.yaml`.
 #[derive(Debug, Clone)]
 pub struct ImuCalibration {
-    /// Extrinsics transforming points from the body frame to the sensor frame
-    /// (identity for EuRoC, since the IMU defines the body frame).
+    /// Extrinsics transforming points from the sensor frame to the body
+    /// frame (identity for EuRoC, since the IMU defines the body frame —
+    /// see `lib.rs`'s own `assert!(... t_bs.is_identity(...))` check).
     pub t_bs: Matrix4<f64>,
     pub rate_hz: f64,
     pub gyroscope_noise_density: f64,
