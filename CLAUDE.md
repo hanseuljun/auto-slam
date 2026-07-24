@@ -8,19 +8,20 @@ one) working in this repository.
 A stereo-inertial SLAM program and reconstruction library, written in Rust,
 with the SLAM/estimation algorithms implemented from scratch (infra crates
 like `nalgebra`/`image`/`serde` are fine; no OpenCV/g2o/Ceres/existing SLAM
-crates). Current stage plan: `plan/STAGE4.md` (full-sequence real-time
-VIO — make `bin/slam-run`'s default the whole sequence, not a bounded
-600-frame clip, while holding the real-time bar and not regressing
-accuracy). `plan/STAGE3.md` (trajectory visualization), `plan/STAGE2.md`
-(real-time VIO on a bounded clip + finishing Stage 1's M9/M10), and
-`plan/STAGE1.md` (the original 11-milestone SLAM plan) are all done and
-worth reading for that history. `plan/STAGE3.md` has its own
-dependency-policy addendum (a hand-written rendering library is "the
-algorithm" there; `wgpu`/`winit`/`egui` are infra, same spirit as
-`nalgebra`/`image` above). Read the current stage plan before picking
-up work, and update
-it (or add `plan/STAGE4.md` etc.) when the plan itself changes, not just
-when code changes.
+crates). Current stage plan: `plan/STAGE5.md` (honest drift measurement +
+real loop closure — fix ATE so it's near zero close to the start of a
+trajectory instead of silently absorbing later drift, then wire this
+repo's existing loop closure into the actual `bin/slam-run` pipeline on
+every sequence, not just a one-sequence demo). `plan/STAGE4.md`
+(full-sequence real-time VIO), `plan/STAGE3.md` (trajectory
+visualization), `plan/STAGE2.md` (real-time VIO on a bounded clip +
+finishing Stage 1's M9/M10), and `plan/STAGE1.md` (the original
+11-milestone SLAM plan) are all done and worth reading for that history.
+`plan/STAGE3.md` has its own dependency-policy addendum (a hand-written
+rendering library is "the algorithm" there; `wgpu`/`winit`/`egui` are
+infra, same spirit as `nalgebra`/`image` above). Read the current stage
+plan before picking up work, and update it (or add `plan/STAGE5.md`
+etc.) when the plan itself changes, not just when code changes.
 
 ## Verification: tests + a human-readable test app
 
