@@ -157,18 +157,23 @@ fn run_sequence(seq_dir: &Path, out_dir: &Path, full: bool, frame_cap: usize, ru
 
     let mut prev_timestamp = seq.cam0_frames[0].timestamp_ns;
     let mut lost_frames = 0usize;
+    let mut recovered_frames = 0usize;
     for i in 1..num_frames {
         let left = seq.load_cam0_image(i)?;
         let right = seq.load_cam1_image(i)?;
         let timestamp = seq.cam0_frames[i].timestamp_ns;
         let imu_since_last: Vec<_> = seq.imu_samples.iter().filter(|s| s.timestamp_ns > prev_timestamp && s.timestamp_ns <= timestamp).cloned().collect();
         prev_timestamp = timestamp;
-        if vio.process_frame(&left, &right, timestamp, &imu_since_last).is_none() {
-            // M6's recovery only fails to produce a result on a single
-            // genuinely-untrackable frame; the next real frame recovers
-            // via IMU propagation. Count and keep going rather than
-            // aborting the whole sequence over it.
-            lost_frames += 1;
+        match vio.process_frame(&left, &right, timestamp, &imu_since_last) {
+            None => {
+                // M6's recovery only fails to produce a result on a single
+                // genuinely-untrackable frame; the next real frame recovers
+                // via IMU propagation. Count and keep going rather than
+                // aborting the whole sequence over it.
+                lost_frames += 1;
+            }
+            Some(r) if r.recovered => recovered_frames += 1,
+            Some(_) => {}
         }
     }
     let data_seconds = (prev_timestamp - seq.cam0_frames[0].timestamp_ns) as f64 * 1e-9;
@@ -242,7 +247,7 @@ fn run_sequence(seq_dir: &Path, out_dir: &Path, full: bool, frame_cap: usize, ru
     slam_eval::write_run_meta(run_dir.join("meta.json"), &run_meta)?;
 
     println!(
-        "{num_frames} frames ({data_seconds:.1}s of data), {before_ba} keyframes ({lost_frames} unrecoverable single frames), ATE rmse={:.3}m mean={:.3}m median={:.3}m std={:.3}m max={:.3}m",
+        "{num_frames} frames ({data_seconds:.1}s of data), {before_ba} keyframes ({lost_frames} unrecoverable single frames, {recovered_frames} track-loss recoveries), ATE rmse={:.3}m mean={:.3}m median={:.3}m std={:.3}m max={:.3}m",
         report.ate.rmse, report.ate.mean, report.ate.median, report.ate.std, report.ate.max
     );
     for rpe in &report.rpe {

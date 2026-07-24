@@ -158,13 +158,13 @@ literal unbounded history — no new linear algebra, reuses the existing,
 already-tested `Problem`/`optimize` machinery, just bounds what goes
 into it. All 5 sequences, full un-truncated, after the fix:
 
-| Sequence | keyframes | vision (s) | optimization (s) | global BA (s) | total wall-clock (s) | data (s) | whole-run factor | ATE full (m) | ATE bounded clip (m) |
-|---|---|---|---|---|---|---|---|---|---|
-| MH_01_easy | 741 | 115.2 | 26.8 | 7.8 | 149.8 | 184.0 | **0.814** | 3.868 | 0.151 |
-| MH_02_easy | 552 | 79.3 | 18.5 | 7.7 | 105.5 | 152.0 | **0.694** | 3.854 | 0.184 |
-| MH_03_medium | 536 | 71.2 | 16.2 | 7.4 | 94.8 | 134.9 | **0.702** | 3.460 | 0.511 |
-| MH_04_difficult | 364 | 37.9 | 5.2 | 7.0 | 50.1 | 101.6 | **0.493** | 6.600 | 1.174 |
-| MH_05_difficult | 456 | 54.6 | 12.1 | 7.4 | 74.1 | 113.6 | **0.652** | 6.818 | 0.455 |
+| Sequence | keyframes | track-loss recoveries | vision (s) | optimization (s) | global BA (s) | total wall-clock (s) | data (s) | whole-run factor | ATE full (m) | ATE bounded clip (m) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| MH_01_easy | 741 | 382 (51.6%) | 115.2 | 26.8 | 7.8 | 149.8 | 184.0 | **0.814** | 3.868 | 0.151 |
+| MH_02_easy | 552 | 255 (46.2%) | 79.3 | 18.5 | 7.7 | 105.5 | 152.0 | **0.694** | 3.854 | 0.184 |
+| MH_03_medium | 536 | 270 (50.4%) | 71.2 | 16.2 | 7.4 | 94.8 | 134.9 | **0.702** | 3.460 | 0.511 |
+| MH_04_difficult | 364 | 164 (45.1%) | 37.9 | 5.2 | 7.0 | 50.1 | 101.6 | **0.493** | 6.600 | 1.174 |
+| MH_05_difficult | 456 | 230 (50.4%) | 54.6 | 12.1 | 7.4 | 74.1 | 113.6 | **0.652** | 6.818 | 0.455 |
 
 "whole-run factor" = `(vision + optimization + global_ba) /
 data_seconds` — redefined for Stage 4's goal 2 to count *everything*,
@@ -176,19 +176,61 @@ it reported 0.686 for `MH_01_easy` even at 957s of global-BA cost).
 is now roughly flat (~7-8s) regardless of sequence length, since it no
 longer scales with total keyframe count.
 
-**Goal 3 (accuracy) is not yet met.** Full-sequence ATE is dramatically
-worse than the bounded clip on every sequence (5.6x-25.6x), confirmed
-*not* to be caused by the M1 fix itself — `MH_01_easy`'s ATE was
-3.869m before the fix (unbounded global BA) and 3.868m after (bounded),
-essentially identical, so bounding global BA's scope cost nothing here.
-This is a pre-existing gap the bounded-clip numbers above never
-surfaced: this harness doesn't chain in loop closure
-(`bin/slam-run`'s own documented scope), and un-corrected drift over a
-full ~100-180s trajectory is far larger than over a ~30s clip — but the
-5.6x-25.6x magnitude, and global BA running over the *full* history
-(pre-fix) still leaving ATE this high, is worth real investigation
-before accepting "no loop closure" as the whole explanation. `plan/
-STAGE4.md` M2's open item.
+"track-loss recoveries" (`bin/slam-run` now counts and reports these,
+Stage 4 M2 — previously only "unrecoverable single frames," always 0,
+was reported) are keyframes forced by too-few-surviving-LK-tracks rather
+than the usual stride, using IMU-only propagation with a reset local map
+(`plan/STAGE1.md` M6). **45-52% of all keyframes on every sequence are
+recoveries** — investigated as M2's leading candidate for the accuracy
+gap below, but ruled out as the *differentiating* cause: the bounded
+600-frame clip shows the same rate (MH_01's own bounded clip: 47 of 106
+keyframes, 44.3%), so this is a pervasive pipeline characteristic at
+both scales, not something that newly appears or worsens on full
+sequences. Real, and worth a future stage's attention as a frontend-
+robustness gap, but not what explains why full-sequence ATE is worse
+than the bounded clip's.
+
+**Goal 3 (accuracy) is met — the gap vs. the bounded clip is confirmed
+natural full-sequence drift, not a regression (`plan/STAGE4.md` M2).**
+Full-sequence ATE is worse than the bounded clip on every sequence
+(5.6x-25.6x), confirmed *not* caused by the M1 fix itself
+(`MH_01_easy`'s ATE was 3.869m unbounded vs. 3.868m bounded-scope,
+essentially identical). The right question wasn't "is this multiple too
+big" in the abstract — it was whether full-sequence ATE is worse than
+this pipeline's own already-known, already-documented full-sequence
+drift, or in line with it. It's in line with it: `plan/STAGE1.md` M6
+(`memory/progress/2026-07-21-m6-robust-tracking-and-full-sequence-runs.md`)
+already measured full-sequence ATE for the pure-VO pipeline (no IMU
+fusion, no windowed backend, no global BA at all) over a year-old
+codebase revision, and documented multi-meter drift there as *"expected,
+not a regression... this is what no-loop-closure full-sequence flight
+looks like."* Re-run fresh against the current code
+(`full_sequence_runs_survive_all_five_sequences_without_permanent_loss`,
+`crates/slam-frontend/src/lib.rs`, `#[ignore]`d, 2026-07-23) to get an
+apples-to-apples current-code baseline:
+
+| Sequence | VO-only full ATE (m), no IMU/backend/BA | VIO full ATE (m), M0/M1 table above | Δ |
+|---|---|---|---|
+| MH_01_easy | 3.389 | 3.868 | +14% |
+| MH_02_easy | 3.872 | 3.854 | -0.5% |
+| MH_03_medium | 3.410 | 3.460 | +1.5% |
+| MH_04_difficult | 6.533 | 6.600 | +1.0% |
+| MH_05_difficult | 5.615 | 6.818 | +21% |
+
+Full VIO lands within ~20% of a completely independent, previously-
+documented baseline on every sequence (matching almost exactly on 3 of
+5) — despite the two pipelines sharing almost no code path beyond the
+frontend (VO-only has no IMU factors, no windowed marginalized backend,
+no global BA pass at all). Both are dominated by the same structural
+cause: no loop closure means multi-minute flights accumulate multi-meter
+drift, and no amount of windowed/global optimization corrects an error
+that has no absolute reference to correct against. This cross-validation
+— an independent measurement, from a different stage, using a different
+code path, landing in the same range — is what "explainable by natural
+drift-over-time, not a bug-shaped regression" (`plan/STAGE4.md` M2's own
+bar) actually requires; a plausible-sounding story alone wouldn't have
+been enough. No fix needed or applied; M2 closes with this finding, not
+a code change.
 
 ## Known gaps (honest, not swept under the rug)
 

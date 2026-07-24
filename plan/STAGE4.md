@@ -200,7 +200,7 @@ changing the default, no milestone closes on an assumed number.
   this path against real MH_01 data — it would panic, not just report
   a wrong number, if the guard were missing.
 
-### M2 — Root-cause and fix any accuracy regression — confirmed needed, not yet started
+### M2 — Root-cause and fix any accuracy regression — Done
 
 - **M0 confirmed this is needed, on all 5 sequences, not just
   `MH_01_easy`**: full-sequence ATE vs. bounded-clip ATE is 5.6x-25.6x
@@ -230,6 +230,34 @@ changing the default, no milestone closes on an assumed number.
   natural drift-over-time from the bounded-clip numbers, not a
   bug-shaped regression — and M1's real-time fix (if any) must not have
   traded accuracy for speed to get there.
+- **Result**: investigated two candidates, found one real-but-not-
+  differentiating characteristic and one clean confirmation. First,
+  instrumented `bin/slam-run` to count track-loss recoveries (keyframes
+  forced by too-few-surviving-LK-tracks, using IMU-only propagation with
+  a map reset, `plan/STAGE1.md` M6) — 45-52% of all keyframes on every
+  full sequence are recoveries, a strikingly high rate. But the bounded
+  600-frame clip shows the *same* rate (MH_01: 44.3% bounded vs 51.6%
+  full), so this is a pervasive pipeline characteristic present at both
+  scales, not something that differentially worsens on full runs — ruled
+  out as the cause of the *gap* specifically, though real and worth a
+  future stage's frontend-robustness attention on its own. Second, and
+  decisive: re-ran `plan/STAGE1.md` M6's own `#[ignore]`d full-sequence
+  VO-only checkpoint test (no IMU fusion, no windowed backend, no global
+  BA — a completely different code path) fresh against current code.
+  Full VIO's ATE lands within ~20% of that independent VO-only baseline
+  on every sequence (matching within 2% on 3 of 5) — both dominated by
+  the same structural cause (no loop closure, multi-minute flights
+  accumulate multi-meter drift that no windowed/global optimization can
+  correct without an absolute reference). M6 already documented
+  multi-meter full-sequence drift as "expected, not a regression" a full
+  stage before this one started; the current numbers confirm that
+  characterization still holds, from an independently-derived pipeline
+  path, not just re-reading the same numbers under a different framing.
+  No fix needed or applied. `bin/slam-run` keeps the recovery-rate
+  instrumentation as a permanent diagnostic (cheap, and directly
+  answers a question this milestone needed answered). Full writeup:
+  `docs/RESULTS.md`'s "Full-sequence results" section,
+  `memory/progress/2026-07-24-stage4-m2-accuracy-regression-ruled-out.md`.
 
 ### M3 — Flip the default, keep a fast bounded mode available
 

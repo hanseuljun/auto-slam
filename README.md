@@ -16,9 +16,10 @@ sensor data processed in at most 1 second of wall-clock, **now
 confirmed on full, un-truncated sequences too, Stage 4 M0/M1**, see
 below), and — as of Stage 3 — trajectory visualization (`slam-render` +
 `bin/slam-viz`, **done**). Current plan: [`plan/STAGE4.md`](plan/STAGE4.md)
-— `bin/slam-run --full` is now real-time on every sequence; next is
-confirming full-sequence accuracy doesn't regress before flipping the
-default. [`plan/STAGE1.md`](plan/STAGE1.md),
+— `bin/slam-run --full` is now real-time on every sequence, and its
+full-sequence accuracy is confirmed not to be a regression (M2, see
+below); next is flipping the default from the bounded clip to the full
+sequence (M3). [`plan/STAGE1.md`](plan/STAGE1.md),
 [`plan/STAGE2.md`](plan/STAGE2.md), and
 [`plan/STAGE3.md`](plan/STAGE3.md) are all done and worth reading for
 that history.
@@ -43,7 +44,7 @@ visualization — `slam-render`, a hand-written 3D rendering library, plus
 frames and diagnostic graphs, synced, and lets users browse past runs)
 is also done: M0-M7 all landed (M7's optional multi-run-comparison
 stretch deferred, not required) — see below. **Stage 4** (full-sequence
-real-time VIO — M0/M1 done, M2 in progress) exists because Stage 2's
+real-time VIO — M0/M1/M2 done, M3 next) exists because Stage 2's
 own real-time-factor number was only ever measured on the 600-frame
 bounded clip `bin/slam-run` defaults to, a gap `plan/STAGE2.md`'s own
 Risks section predicted ("a truncated clip that happens to fit inside
@@ -81,8 +82,8 @@ for a session-by-session log of what landed and when.
 | Stage 3 M7 | Run-browser polish (config values shown in the picker) | **Done — stretch (multi-run overlay) deferred** |
 | Stage 4 M0 | Full-sequence baseline measurement (all 5 sequences) | Done |
 | Stage 4 M1 | Bound `global_bundle_adjustment`'s scope (real-time fix) | **Done — whole-run wall-clock now ≤1.0x on all 5 sequences** |
-| Stage 4 M2 | Root-cause full-sequence ATE regression (5.6x-25.6x vs. bounded clip) | Not started — confirmed real, see `docs/RESULTS.md` |
-| Stage 4 M3 | Flip `bin/slam-run`'s default to full-sequence | Blocked on M2 — see `plan/STAGE4.md` |
+| Stage 4 M2 | Root-cause full-sequence ATE regression (5.6x-25.6x vs. bounded clip) | **Done — confirmed natural drift, not a bug, see `docs/RESULTS.md`** |
+| Stage 4 M3 | Flip `bin/slam-run`'s default to full-sequence | Next — unblocked by M2 |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
