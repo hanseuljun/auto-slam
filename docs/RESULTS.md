@@ -15,9 +15,12 @@ cargo run --release --bin slam-run -- data/machine_hall/MH_01_easy  # one sequen
 ```
 
 Runs the full stereo-inertial VIO pipeline (Stage 1 M5, track-loss
-recovery M6) plus one global bundle-adjustment pass (M8) — loop closure
-(M7) is not chained into this number, see "Scope" below. Prints ATE/RPE
-and a wall-clock timing breakdown per sequence, and writes
+recovery M6), one global bundle-adjustment pass (M8), and — as of `plan/
+STAGE5.md` M2 — loop closure (M7), gated on a real geometric check (see
+"Loop closure and honest ATE (Stage 5)" below). Prints ATE (both the
+legacy whole-trajectory-aligned number and the honest prefix-aligned
+one, `plan/STAGE5.md` M1)/RPE and a wall-clock timing breakdown per
+sequence, and writes
 `runs/<sequence>/trajectory.csv` (per-timestamp estimated vs. groundtruth
 position, always the latest run) plus `runs/summary.csv` (the aggregate
 table these tables are generated from) — same as always.
@@ -140,12 +143,18 @@ real-time goal — see `plan/STAGE2.md` for the resulting re-scoping.
 
 ## Full-sequence results (Stage 4 M0-M3 — now the default)
 
+**These numbers predate `plan/STAGE5.md`'s loop closure (M2) and honest
+prefix-aligned ATE (M1) — see "Loop closure and honest ATE (Stage 5)"
+below for what a plain `cargo run --release --bin slam-run` actually
+produces today.** Kept here as the Stage 4 historical record (real-time
+fix, before loop closure existed).
+
 `plan/STAGE4.md`'s goal: make a full, un-truncated run (not just the
 bounded 600-frame clip above) both real-time and no worse on accuracy,
-then make it the default (M3) — done; a plain `cargo run --release --bin
-slam-run` (no flags) now produces the numbers below. Measured on all 5
-sequences, foreground (background execution of a multi-minute run
-proved unreliable this session — see `memory/progress/2026-07-23-
+then make it the default (M3) — done; at the time, a plain `cargo run
+--release --bin slam-run` (no flags) produced the numbers below. Measured
+on all 5 sequences, foreground (background execution of a multi-minute
+run proved unreliable this session — see `memory/progress/2026-07-23-
 stage4-m0-mh01-full-sequence-measured.md`).
 
 **Before the M1 fix**: `MH_01_easy` alone was profiled live (macOS
@@ -240,18 +249,89 @@ bar) actually requires; a plausible-sounding story alone wouldn't have
 been enough. No fix needed or applied; M2 closes with this finding, not
 a code change.
 
+## Loop closure and honest ATE (Stage 5)
+
+`plan/STAGE5.md`'s two goals: (1) ATE should be near zero close to a
+trajectory's start, since there's no time to have drifted yet — the
+existing whole-trajectory Umeyama alignment let later drift mask this;
+(2) sequences that return to their own starting point (confirmed true of
+all 5 `machine_hall` sequences via groundtruth) should show real evidence
+of loop closure, not stay at high ATE regardless. **Both are done, and
+together they're what a plain `cargo run --release --bin slam-run` (no
+flags) actually produces today** — this supersedes the "Full-sequence
+results" table above, which predates both.
+
+**Goal 1 (M0/M1, `memory/decisions/0020`)**: `crates/slam-eval` gained
+`compute_ate_prefix_aligned` — the Umeyama fit uses only the first 30
+seconds of data instead of the whole trajectory, so a run's own later
+drift can't pull the alignment and mask how accurate the early portion
+really was. Confirmed directly (not just via the aggregate number):
+`MH_01_easy`'s per-point error at its very first keyframe is 0.185m
+under this metric, vs. 3.1m under the old whole-trajectory fit for the
+same underlying (nearly identical) pose estimate.
+
+**Goal 2 (M2, `memory/decisions/0021`)**: loop closure (`plan/STAGE1.md`
+M7) is now chained into `bin/slam-run`'s actual pipeline, on every
+sequence, gated on a real geometric check — a detected/verified loop's
+correction is only kept if it verifiably shrinks the trajectory's own
+start/end position gap (found necessary the hard way: applying a
+verified correction unconditionally regressed `MH_01_easy` during this
+milestone's own baseline check). Also had to fix a real regression of
+Stage 4's own real-time work along the way: naively running pose-graph
+optimization over every dense VIO keyframe reintroduced the exact dense
+O(n^3) scaling bug `plan/STAGE4.md` M1 already closed for global BA —
+fixed with a sparse pose graph plus smooth SE3-interpolated propagation
+onto the dense trajectory, which has its own real, measured RPE cost
+(see the table below and `memory/decisions/0021` for the full tradeoff
+this session swept, including why a denser/higher-quality alternative
+was rejected for breaking the real-time bar).
+
+All 5 sequences, full un-truncated runs, before (Stage 4 M0-M3's own
+numbers) vs. after (Stage 5 M1+M2 applied):
+
+| Sequence | whole-traj. ATE before -> after | prefix-aligned ATE before -> after | RPE d=1 before -> after | start/end gap before -> after |
+|---|---|---|---|---|
+| MH_01_easy | 3.868m -> 3.505m | 5.412m -> 6.893m | 0.162m -> 0.863m | 299.2m -> 145.4m |
+| MH_02_easy | 3.854m -> 3.546m | 7.787m -> 7.548m | 0.218m -> 1.266m | 58.7m -> 12.2m |
+| MH_03_medium | 3.460m -> 3.451m | 17.180m -> 9.844m | 0.378m -> 0.892m | 71.1m -> 32.5m |
+| MH_04_difficult | 6.600m -> 6.496m | 9.689m -> 7.681m | 0.398m -> 1.137m | 32.5m -> 14.5m |
+| MH_05_difficult | 6.818m -> 6.596m | 12.945m -> 7.537m | 0.322m -> 1.293m | 145.8m -> 81.4m |
+
+**The geometric claim (goal 2's own bar) holds on every sequence**: a
+real loop is detected, verified, and its correction accepted by the
+gate — the trajectory's own start/end gap shrinks 2x-4.8x everywhere,
+in this pipeline's own (ungrounded) world-frame units. Whole-trajectory
+ATE improves slightly on every sequence too. The honest, prefix-aligned
+ATE improves substantially on 4 of 5 (MH_03 nearly halves, MH_05 nearly
+halves, MH_04 and MH_02 both improve) but gets *worse* on `MH_01_easy`
+specifically (5.412m -> 6.893m) despite its own loop closure applying
+successfully — an open, honestly-reported finding, not yet fully
+explained (`MH_01`'s own correction is the largest in absolute magnitude
+of the five, and its post-correction residual gap the largest too,
+plausibly related, not confirmed). **RPE consistently degrades on every
+sequence** (the interpolated-propagation cost documented above) — real,
+open, and worth a future stage's attention (a genuinely sparse pose-graph
+solver, rather than this session's stride-based workaround, is the
+likely fix, matching the same "sparse solve" deferral pattern this
+repo's other dense-solver call sites have already taken).
+
 ## Known gaps (honest, not swept under the rug)
 
 - **Not apples-to-apples with the published numbers on two axes**: (1)
   this repo's numbers are a 30-second bounded clip, not a full sequence
   (~100-180s) — ATE over a shorter clip has less time to accumulate drift,
   so this is not a favorable comparison to read too much into either
-  direction; (2) the published systems all include loop closure / global
-  optimization in their own numbers where available, this repo's numbers
-  here don't (`memory` — loop closure isn't chained into this benchmark
-  yet, `bin/slam-inspect`'s separate MH_05 section shows this repo's own
-  loop closure taking full-sequence ATE from ~5.6m to ~3.3m, a different
-  pipeline configuration than this table).
+  direction — and this table's own bounded-clip numbers don't include
+  loop closure either (`--frames 600`'s ~30s clip is too short for any
+  of the loops `plan/STAGE5.md` Finding 2 found — those only close at a
+  sequence's very end); (2) the published systems' own numbers use a
+  fixed-scale (not free-scale) alignment, appropriate since stereo-
+  inertial scale should be directly observable — this repo's numbers
+  above use a free-scale (Sim3) alignment throughout, which `plan/
+  STAGE5.md` M0 found is currently masking a real, unexplained scale
+  characteristic in this pipeline's own reconstruction (`memory/
+  decisions/0020`) — not yet resolved, so this comparison may be more
+  favorable to this repo than a strictly fair one would be.
 - **Noise weighting is still ad hoc**, not derived from `sensor.yaml`'s
   real covariances (`memory/decisions/0006`) — tried in Stage 2 M6
   (`decisions/0016`), measurably regressed real data, reverted. Properly

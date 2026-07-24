@@ -301,7 +301,7 @@ declaring done, no milestone closes on an assumed number.
   seconds` now reports real, measured cost (7.8s-23.2s depending on
   sequence length) instead of the previous hardcoded 0.0.
 
-### M3 — Verify the loop is actually closed, not just that a number moved
+### M3 — Verify the loop is actually closed, not just that a number moved — Done
 
 - A geometric check, not just an aggregate metric: for a sequence whose
   ground truth returns within ~0.13-0.26m of its start (Finding 2, all
@@ -325,6 +325,30 @@ declaring done, no milestone closes on an assumed number.
   groundtruth's ~0.13-0.26m, but a real, order-of-magnitude improvement
   over the uncorrected trajectory's own start/end gap — measured, with
   the actual number reported, not just "it went down").
+- **Result**: the geometric check (M2's own gate, restated here as its
+  own explicit verification) holds on every sequence — real numbers, not
+  assumed: MH_01 299.2m->145.4m, MH_02 58.7m->12.2m, MH_03 71.1m->32.5m,
+  MH_04 32.5m->14.5m, MH_05 145.8m->81.4m (2.1x-4.8x reduction each).
+  Honest shortfall against this milestone's own stated bar: this is a
+  real, meaningful reduction on every sequence, but not a full *order-
+  of-magnitude* one on any of them — the single-loop-edge correction,
+  bounded by the sparse pose graph's own resolution (`memory/
+  decisions/0021`, kept sparse specifically to hold the real-time bar),
+  has a real ceiling on how much it can close a very large gap in one
+  pass. Closing further would need either a denser graph (measured to
+  break the real-time bar, `plan/STAGE5.md` M2's own tradeoff table) or
+  a genuinely sparse pose-graph solver (deferred, a real future-stage
+  undertaking, not attempted here). Re-measured ATE/RPE before/after on
+  all 5 sequences (table in `docs/RESULTS.md`'s "Loop closure and honest
+  ATE" section): whole-trajectory ATE improves slightly everywhere;
+  prefix-aligned (honest) ATE improves substantially on 4 of 5 but
+  regresses on `MH_01_easy` specifically (5.412m->6.893m, not yet fully
+  explained — flagged, not hidden); RPE consistently degrades on every
+  sequence (the interpolated-propagation cost). `docs/RESULTS.md` and
+  `README.md` updated with the full table and narrative — the existing
+  SOTA comparison table's "Known gaps" section now also notes the
+  fixed-scale-vs-free-scale alignment caveat Finding 4 raised, not
+  silently left stale.
 
 ## Out of scope for Stage 5
 

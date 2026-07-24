@@ -19,7 +19,12 @@ below), and — as of Stage 3 — trajectory visualization (`slam-render` +
 defaults to the full, un-truncated sequence (M3) — real-time on every
 sequence (M1) and confirmed not to be an accuracy regression relative to
 the old bounded-clip numbers (M2). Pass `--frames 600` for the old
-bounded/fast-iteration mode. [`plan/STAGE1.md`](plan/STAGE1.md),
+bounded/fast-iteration mode. **Stage 5 (in progress, M0-M2 done)**: ATE
+near a trajectory's start is now honest (a new prefix-aligned metric
+that doesn't let later drift mask early accuracy) and loop closure is
+chained into `bin/slam-run`'s real pipeline on every sequence, gated on
+a real geometric check — see [`docs/RESULTS.md`](docs/RESULTS.md)'s
+"Loop closure and honest ATE" section. [`plan/STAGE1.md`](plan/STAGE1.md),
 [`plan/STAGE2.md`](plan/STAGE2.md), and
 [`plan/STAGE3.md`](plan/STAGE3.md) are all done and worth reading for
 that history.
@@ -50,9 +55,16 @@ bounded clip `bin/slam-run` defaults to, a gap `plan/STAGE2.md`'s own
 Risks section predicted ("a truncated clip that happens to fit inside
 the window can look real-time for reasons that have nothing to do with
 actually fixing the scaling") and `docs/RESULTS.md` admits was never
-closed ("not re-benchmarked with `--full` yet"). See
-[`plan/STAGE1.md`](plan/STAGE1.md), [`plan/STAGE2.md`](plan/STAGE2.md),
-[`plan/STAGE3.md`](plan/STAGE3.md), and [`plan/STAGE4.md`](plan/STAGE4.md)
+closed ("not re-benchmarked with `--full` yet"). **Stage 5** (honest
+drift measurement + real loop closure — M0-M2 done, M3 in progress)
+exists because ATE near a trajectory's start was silently absorbing
+later drift (the existing whole-trajectory alignment let a bad ending
+mask a good beginning), and because every `machine_hall` sequence
+returns near its own starting point yet loop closure — real, tested
+code since Stage 1 M7 — was never wired into the pipeline `bin/slam-run`
+actually reports numbers for. See [`plan/STAGE1.md`](plan/STAGE1.md),
+[`plan/STAGE2.md`](plan/STAGE2.md), [`plan/STAGE3.md`](plan/STAGE3.md),
+[`plan/STAGE4.md`](plan/STAGE4.md), and [`plan/STAGE5.md`](plan/STAGE5.md)
 for the full milestone lists and [`memory/progress/`](memory/progress/)
 for a session-by-session log of what landed and when.
 
@@ -84,6 +96,10 @@ for a session-by-session log of what landed and when.
 | Stage 4 M1 | Bound `global_bundle_adjustment`'s scope (real-time fix) | **Done — whole-run wall-clock now ≤1.0x on all 5 sequences** |
 | Stage 4 M2 | Root-cause full-sequence ATE regression (5.6x-25.6x vs. bounded clip) | **Done — confirmed natural drift, not a bug, see `docs/RESULTS.md`** |
 | Stage 4 M3 | Flip `bin/slam-run`'s default to full-sequence | **Done — `--frames N` opt-in for the old bounded/fast mode** |
+| Stage 5 M0 | Root-cause the ATE alignment/scale anomaly, decide a fix | **Done — see `memory/decisions/0020`** |
+| Stage 5 M1 | Prefix-aligned ATE (honest error near a trajectory's start) | **Done — see `docs/RESULTS.md`** |
+| Stage 5 M2 | Wire real loop closure into `bin/slam-run`'s actual pipeline | **Done — see `memory/decisions/0021`** |
+| Stage 5 M3 | Verify the loop is actually closed, update headline docs | In progress |
 
 As of M3, running `bin/slam-inspect` (below) on the five `MH_*` sequences
 reports stereo-only (no IMU, no backend optimization, no loop closure) VO
@@ -373,6 +389,43 @@ default), and `--frames N` opts into the old bounded/fast-iteration mode
 instead. `bin/slam-viz` needed no code changes (confirmed by loading a
 real 725-keyframe full-sequence run through it directly) since it
 already just renders whatever `trajectory.csv` it's given.
+
+**Stage 5's M0/M1**: full-sequence ATE near a trajectory's start was
+large (`MH_01_easy`: 3.1m) even though the raw pose estimate for those
+early frames barely changed between a 30s and a 184s run of the same
+sequence — the existing Umeyama alignment fits a single transform over
+the *whole* trajectory at once, letting later drift pull the fit and
+mask how accurate the early portion actually was (confirmed directly:
+re-fitting using only the first 30s drops that same error to 0.19m).
+Root-caused a related scale anomaly along the way (the fitted alignment
+scale was nowhere near the ~1.0 a metrically-sound stereo-inertial
+system should show) — ruled out a calibration bug, confirmed the
+pipeline's own reconstruction genuinely drifts in scale over long runs
+(a real, separately-scoped question for a future stage). Fix:
+`compute_ate_prefix_aligned` fits the alignment against only the first
+30 seconds of data — `bin/slam-run` now reports this honest number
+alongside the legacy whole-trajectory one.
+
+**Stage 5's M2**: every `machine_hall` sequence returns within
+~0.13-0.26m of its own starting point after 70-130m of real flight
+(confirmed via groundtruth) — not just `MH_05_difficult`, the only
+sequence loop closure had ever been demonstrated on (a `VoPipeline`-only
+demo in `bin/slam-inspect`, never wired into `bin/slam-run`'s real
+numbers). Wiring it in for real surfaced two things worth knowing: a
+verified loop correction isn't automatically a good one (applying one
+unconditionally regressed `MH_01_easy`'s VO-only baseline, 3.370m ->
+3.907m — fixed with a geometric gate that only keeps a correction if it
+verifiably shrinks the trajectory's own start/end gap), and naively
+running pose-graph optimization over every dense VIO keyframe
+reintroduced the *exact* dense O(n^3) scaling bug Stage 4 M1 already
+fixed for global BA (didn't finish in 10+ minutes) — fixed with a
+sparse pose graph plus smooth interpolation onto the dense trajectory,
+which has its own real, documented RPE cost (a denser graph roughly
+halves it but breaks the real-time bar, so real-time won). Verified on
+all 5 sequences: a loop is detected, verified, and applied everywhere,
+shrinking the trajectory's own start/end gap 2x-4.8x, real-time bar
+holding throughout (whole-run factor 0.56-0.85). Full numbers:
+`docs/RESULTS.md`'s "Loop closure and honest ATE" section.
 
 ## Building
 
